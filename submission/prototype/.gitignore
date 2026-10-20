@@ -21,10 +21,12 @@ develop-eggs/
 dist/
 downloads/
 eggs/
-.eggs/
-lib/
-lib64/
-parts/
+# Python virtual environment internal libs (do not ignore TypeScript lib dirs)
+venv/lib/
+env/lib/
+ENV/lib/
+!**/frontend/**/lib/**
+!**/lib/firebase.ts
 sdist/
 var/
 wheels/
