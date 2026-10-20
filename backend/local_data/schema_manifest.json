@@ -1,0 +1,76 @@
+{
+  "features": [
+    "monthly_income_band_value",
+    "debt_to_income_ratio",
+    "late_payment_count_12m",
+    "credit_utilization_ratio",
+    "income_variability",
+    "loan_amount_to_income",
+    "account_history_months",
+    "utility_payment_consistency"
+  ],
+  "target": "defaulted",
+  "bounds": {
+    "monthly_income_band_value": [
+      1000.0,
+      50000.0
+    ],
+    "debt_to_income_ratio": [
+      0.01,
+      1.5
+    ],
+    "late_payment_count_12m": [
+      0,
+      12
+    ],
+    "credit_utilization_ratio": [
+      0.0,
+      1.5
+    ],
+    "income_variability": [
+      0.0,
+      1.0
+    ],
+    "loan_amount_to_income": [
+      0.1,
+      15.0
+    ],
+    "account_history_months": [
+      1,
+      360
+    ],
+    "utility_payment_consistency": [
+      0.0,
+      1.0
+    ]
+  },
+  "seed": 42,
+  "summary": {
+    "seed": 42,
+    "partitions": {
+      "lender_a": {
+        "samples": 1200,
+        "default_rate": 0.07666666666666666,
+        "train_csv": "backend/local_data\\lender_a\\train.csv",
+        "demo_cases_count": 10
+      },
+      "lender_b": {
+        "samples": 1200,
+        "default_rate": 0.44166666666666665,
+        "train_csv": "backend/local_data\\lender_b\\train.csv",
+        "demo_cases_count": 10
+      },
+      "lender_c": {
+        "samples": 1200,
+        "default_rate": 0.42833333333333334,
+        "train_csv": "backend/local_data\\lender_c\\train.csv",
+        "demo_cases_count": 10
+      },
+      "holdout_test": {
+        "samples": 900,
+        "default_rate": 0.2866666666666667,
+        "test_csv": "backend/local_data\\holdout_test\\test.csv"
+      }
+    }
+  }
+}

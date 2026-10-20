@@ -1,0 +1,152 @@
+[
+  {
+    "case_id": "DEMO-A-001",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 6613.86,
+      "debt_to_income_ratio": 0.4212,
+      "late_payment_count_12m": 0.0,
+      "credit_utilization_ratio": 0.6116,
+      "income_variability": 0.1216,
+      "loan_amount_to_income": 2.9508,
+      "account_history_months": 32.0,
+      "utility_payment_consistency": 0.9294
+    },
+    "ground_truth_default": 1
+  },
+  {
+    "case_id": "DEMO-A-002",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 7795.96,
+      "debt_to_income_ratio": 0.3786,
+      "late_payment_count_12m": 1.0,
+      "credit_utilization_ratio": 0.3023,
+      "income_variability": 0.2092,
+      "loan_amount_to_income": 3.1918,
+      "account_history_months": 56.0,
+      "utility_payment_consistency": 0.8448
+    },
+    "ground_truth_default": 0
+  },
+  {
+    "case_id": "DEMO-A-003",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 9229.57,
+      "debt_to_income_ratio": 0.2754,
+      "late_payment_count_12m": 0.0,
+      "credit_utilization_ratio": 0.2339,
+      "income_variability": 0.01,
+      "loan_amount_to_income": 1.3906,
+      "account_history_months": 57.0,
+      "utility_payment_consistency": 0.7355
+    },
+    "ground_truth_default": 0
+  },
+  {
+    "case_id": "DEMO-A-004",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 5785.12,
+      "debt_to_income_ratio": 0.6059,
+      "late_payment_count_12m": 4.0,
+      "credit_utilization_ratio": 0.1431,
+      "income_variability": 0.1047,
+      "loan_amount_to_income": 4.596,
+      "account_history_months": 98.0,
+      "utility_payment_consistency": 0.5947
+    },
+    "ground_truth_default": 1
+  },
+  {
+    "case_id": "DEMO-A-005",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 8096.89,
+      "debt_to_income_ratio": 0.3888,
+      "late_payment_count_12m": 0.0,
+      "credit_utilization_ratio": 0.5128,
+      "income_variability": 0.0294,
+      "loan_amount_to_income": 3.9307,
+      "account_history_months": 179.0,
+      "utility_payment_consistency": 0.6881
+    },
+    "ground_truth_default": 0
+  },
+  {
+    "case_id": "DEMO-A-006",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 4181.65,
+      "debt_to_income_ratio": 0.2662,
+      "late_payment_count_12m": 0.0,
+      "credit_utilization_ratio": 0.0631,
+      "income_variability": 0.0336,
+      "loan_amount_to_income": 2.1327,
+      "account_history_months": 209.0,
+      "utility_payment_consistency": 0.8295
+    },
+    "ground_truth_default": 0
+  },
+  {
+    "case_id": "DEMO-A-007",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 8836.56,
+      "debt_to_income_ratio": 0.1951,
+      "late_payment_count_12m": 2.0,
+      "credit_utilization_ratio": 0.49,
+      "income_variability": 0.1603,
+      "loan_amount_to_income": 4.0901,
+      "account_history_months": 138.0,
+      "utility_payment_consistency": 0.4309
+    },
+    "ground_truth_default": 0
+  },
+  {
+    "case_id": "DEMO-A-008",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 7862.27,
+      "debt_to_income_ratio": 0.2872,
+      "late_payment_count_12m": 0.0,
+      "credit_utilization_ratio": 0.1912,
+      "income_variability": 0.0868,
+      "loan_amount_to_income": 0.8758,
+      "account_history_months": 228.0,
+      "utility_payment_consistency": 0.7416
+    },
+    "ground_truth_default": 0
+  },
+  {
+    "case_id": "DEMO-A-009",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 4358.56,
+      "debt_to_income_ratio": 0.2732,
+      "late_payment_count_12m": 1.0,
+      "credit_utilization_ratio": 0.2912,
+      "income_variability": 0.0128,
+      "loan_amount_to_income": 1.5179,
+      "account_history_months": 194.0,
+      "utility_payment_consistency": 0.6401
+    },
+    "ground_truth_default": 0
+  },
+  {
+    "case_id": "DEMO-A-010",
+    "lender_id": "lender_a",
+    "features": {
+      "monthly_income_band_value": 7421.56,
+      "debt_to_income_ratio": 0.3143,
+      "late_payment_count_12m": 0.0,
+      "credit_utilization_ratio": 0.2238,
+      "income_variability": 0.0278,
+      "loan_amount_to_income": 2.6429,
+      "account_history_months": 59.0,
+      "utility_payment_consistency": 0.8548
+    },
+    "ground_truth_default": 0
+  }
+]

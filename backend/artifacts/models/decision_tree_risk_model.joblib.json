@@ -1,0 +1,40 @@
+{
+  "model_type": "DecisionTreeClassifier",
+  "version": "DT-v1.0.0",
+  "filepath": "backend/artifacts\\models\\decision_tree_risk_model.joblib",
+  "artifact_hash": "4d05de741693693218ce205d56f732c5ca95b9b10364db6569ef810fa461f075",
+  "feature_names": [
+    "monthly_income_band_value",
+    "debt_to_income_ratio",
+    "late_payment_count_12m",
+    "credit_utilization_ratio",
+    "income_variability",
+    "loan_amount_to_income",
+    "account_history_months",
+    "utility_payment_consistency"
+  ],
+  "classes": [
+    0,
+    1
+  ],
+  "metrics": {
+    "train_samples": 2880,
+    "train_auroc": 0.8268096590909091,
+    "train_pr_auc": 0.678632901778734,
+    "train_f1": 0.6261180679785331,
+    "max_depth": 5,
+    "min_samples_leaf": 20,
+    "node_count": 59,
+    "val_samples": 720,
+    "val_auroc": 0.7661722117456897,
+    "val_f1": 0.5386416861826698,
+    "val_brier": 0.1901164053077321,
+    "holdout_test_samples": 900,
+    "holdout_auroc": 0.7370891593614914,
+    "holdout_pr_auc": 0.4708084056258412,
+    "holdout_f1": 0.46123260437375746,
+    "holdout_precision": 0.47346938775510206,
+    "holdout_recall": 0.4496124031007752,
+    "holdout_brier": 0.1894852704675629
+  }
+}

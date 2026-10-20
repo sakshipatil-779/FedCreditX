@@ -1,0 +1,53 @@
+{
+  "version": "fl-global-dp-v1",
+  "training_run_id": "RUN-FL-ef24ab3a",
+  "filepath": "backend/artifacts\\models\\federated_global_dp.pt",
+  "artifact_hash": "962be7d332265d27fddf99c3e71ab33298dcecb6bd6af2552091a20ff1839b7a",
+  "metrics": {
+    "model_type": "Flower FedAvg (3 Clients) + Opacus DP-SGD",
+    "completed_rounds": 1,
+    "holdout_test_samples": 900,
+    "final_loss": 0.6352,
+    "roc_auc": 0.8062,
+    "pr_auc": 0.6245,
+    "f1_score": 0.6134,
+    "precision": 0.5296,
+    "recall": 0.7287,
+    "brier_score": 0.2213,
+    "participating_clients": [
+      "lender_a",
+      "lender_b",
+      "lender_c"
+    ],
+    "privacy_mode": "dp",
+    "round_history": [
+      {
+        "round": 1,
+        "loss": 0.6352,
+        "roc_auc": 0.8062,
+        "pr_auc": 0.6245,
+        "f1_score": 0.6134,
+        "precision": 0.5296,
+        "recall": 0.7287,
+        "brier_score": 0.2213
+      }
+    ],
+    "differential_privacy": {
+      "mechanism": "DP-SGD (Gaussian Noise + L2 Gradient Clipping)",
+      "privacy_scope": "Sample-level Differential Privacy (Local Client DP-SGD)",
+      "accountant_type": "R\u00e9nyi Differential Privacy (RDPAccountant)",
+      "noise_multiplier": 1.0,
+      "max_grad_norm": 1.0,
+      "target_delta": 0.0001,
+      "cumulative_client_epsilons": {
+        "lender_a": 1.6055943752145911,
+        "lender_b": 1.6055943752145911,
+        "lender_c": 1.6055943752145911
+      },
+      "cumulative_max_epsilon": 1.6056,
+      "secure_mode": false,
+      "secure_mode_note": "Cryptographically non-secure PRNG used for prototype speed; production deployments require secure_mode=True with CS-PRNG."
+    }
+  },
+  "privacy_mode": "dp"
+}

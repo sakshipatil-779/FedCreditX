@@ -1,0 +1,33 @@
+{
+  "feature_names": [
+    "monthly_income_band_value",
+    "debt_to_income_ratio",
+    "late_payment_count_12m",
+    "credit_utilization_ratio",
+    "income_variability",
+    "loan_amount_to_income",
+    "account_history_months",
+    "utility_payment_consistency"
+  ],
+  "means": {
+    "monthly_income_band_value": 4669.478125,
+    "debt_to_income_ratio": 0.3615513888888889,
+    "late_payment_count_12m": 0.5204861111111111,
+    "credit_utilization_ratio": 0.428911875,
+    "income_variability": 0.31155951388888886,
+    "loan_amount_to_income": 3.488787847222222,
+    "account_history_months": 87.18923611111111,
+    "utility_payment_consistency": 0.6284670833333333
+  },
+  "stds": {
+    "monthly_income_band_value": 2724.967917755911,
+    "debt_to_income_ratio": 0.15558212815820993,
+    "late_payment_count_12m": 0.8918596596914095,
+    "credit_utilization_ratio": 0.22161115585784721,
+    "income_variability": 0.2140558640409537,
+    "loan_amount_to_income": 1.7197822301330703,
+    "account_history_months": 58.25781977292191,
+    "utility_payment_consistency": 0.18309679065954812
+  },
+  "fitted": true
+}

@@ -1,0 +1,77 @@
+{
+  "version": "fl-global-v5",
+  "training_run_id": "RUN-FL-a87b04f9",
+  "filepath": "backend/artifacts\\models\\federated_global_latest.pt",
+  "artifact_hash": "4407f43699a878c2e975fa4b9fc27351c7e183c8bcae96eeaf9d44d577dabde4",
+  "metrics": {
+    "model_type": "Flower FedAvg (3 Clients)",
+    "completed_rounds": 5,
+    "holdout_test_samples": 900,
+    "final_loss": 0.4863,
+    "roc_auc": 0.8071,
+    "pr_auc": 0.6279,
+    "f1_score": 0.5664,
+    "precision": 0.5709,
+    "recall": 0.562,
+    "brier_score": 0.1612,
+    "participating_clients": [
+      "lender_a",
+      "lender_b",
+      "lender_c"
+    ],
+    "privacy_mode": "none",
+    "round_history": [
+      {
+        "round": 1,
+        "loss": 0.5758,
+        "roc_auc": 0.807,
+        "pr_auc": 0.6289,
+        "f1_score": 0.6136,
+        "precision": 0.5279,
+        "recall": 0.7326,
+        "brier_score": 0.1942
+      },
+      {
+        "round": 2,
+        "loss": 0.5311,
+        "roc_auc": 0.807,
+        "pr_auc": 0.6287,
+        "f1_score": 0.5979,
+        "precision": 0.537,
+        "recall": 0.6744,
+        "brier_score": 0.1765
+      },
+      {
+        "round": 3,
+        "loss": 0.5084,
+        "roc_auc": 0.807,
+        "pr_auc": 0.6285,
+        "f1_score": 0.5814,
+        "precision": 0.5502,
+        "recall": 0.6163,
+        "brier_score": 0.1685
+      },
+      {
+        "round": 4,
+        "loss": 0.4949,
+        "roc_auc": 0.8071,
+        "pr_auc": 0.6283,
+        "f1_score": 0.5833,
+        "precision": 0.5704,
+        "recall": 0.5969,
+        "brier_score": 0.164
+      },
+      {
+        "round": 5,
+        "loss": 0.4863,
+        "roc_auc": 0.8071,
+        "pr_auc": 0.6279,
+        "f1_score": 0.5664,
+        "precision": 0.5709,
+        "recall": 0.562,
+        "brier_score": 0.1612
+      }
+    ]
+  },
+  "privacy_mode": "none"
+}
