@@ -15,7 +15,7 @@ services:
 
   # FedCreditX Next.js Frontend Service
   - type: web
-    name: fedcreditx-ui
+    name: fedcreditx
     runtime: node
     region: oregon
     plan: free
