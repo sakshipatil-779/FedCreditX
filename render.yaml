@@ -1,0 +1,28 @@
+services:
+  # FedCreditX FastAPI Backend Service
+  - type: web
+    name: fedcreditx-api
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: CORS_ORIGINS
+        value: http://localhost:3000,http://127.0.0.1:3000
+
+  # FedCreditX Next.js Frontend Service
+  - type: web
+    name: fedcreditx-ui
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.x
+      # Set NEXT_PUBLIC_API_URL to your backend Render URL (e.g., https://fedcreditx-api.onrender.com)
