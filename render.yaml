@@ -20,9 +20,12 @@ services:
     region: oregon
     plan: free
     rootDir: frontend
-    buildCommand: npm install && npm run build
-    startCommand: npm run start
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npx next start -H 0.0.0.0 --port $PORT
     envVars:
       - key: NODE_VERSION
-        value: 20.x
-      # Set NEXT_PUBLIC_API_URL to your backend Render URL (e.g., https://fedcreditx-api.onrender.com)
+        value: "20"
+      - key: NPM_CONFIG_PRODUCTION
+        value: "false"
+      - key: NEXT_PUBLIC_API_URL
+        value: https://fedcreditx-api.onrender.com
