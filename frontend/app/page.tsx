@@ -202,6 +202,13 @@ export default function FedCreditXDashboard() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Restrict bank officers from audit screen (audit logs are strictly for auditors)
+  useEffect(() => {
+    if (currentUser?.role === "bank_officer" && activeScreen === "audit") {
+      setActiveScreen("decision");
+    }
+  }, [currentUser, activeScreen]);
+
   // When selected lender changes, reload real cases from backend
   useEffect(() => {
     if (currentUser) {
@@ -681,24 +688,26 @@ export default function FedCreditXDashboard() {
                   )}
                 </button>
 
-                <button
-                  onClick={() => {
-                    setActiveScreen("audit");
-                    setMobileMenuOpen(false);
-                  }}
-                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-2xl text-xs font-semibold transition-all cursor-pointer ${
-                    activeScreen === "audit"
-                      ? "bg-[#123F36] text-white font-bold shadow-xs"
-                      : "text-[#758079] hover:text-[#111713] hover:bg-[#F7F8F7]"
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={`p-1.5 rounded-xl ${activeScreen === "audit" ? "bg-white/20 text-white" : "text-[#758079]"}`}>
-                      <IconAudit className="w-4 h-4" />
+                {currentUser?.role === "risk_auditor" && (
+                  <button
+                    onClick={() => {
+                      setActiveScreen("audit");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-2xl text-xs font-semibold transition-all cursor-pointer ${
+                      activeScreen === "audit"
+                        ? "bg-[#123F36] text-white font-bold shadow-xs"
+                        : "text-[#758079] hover:text-[#111713] hover:bg-[#F7F8F7]"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`p-1.5 rounded-xl ${activeScreen === "audit" ? "bg-white/20 text-white" : "text-[#758079]"}`}>
+                        <IconAudit className="w-4 h-4" />
+                      </div>
+                      <span>Audit Logs</span>
                     </div>
-                    <span>Audit Logs</span>
-                  </div>
-                </button>
+                  </button>
+                )}
 
                 <button
                   onClick={() => {
@@ -871,7 +880,7 @@ export default function FedCreditXDashboard() {
                         </div>
                       )}
 
-                      {searchResults.audit_events.length > 0 && (
+                      {currentUser?.role === "risk_auditor" && searchResults.audit_events.length > 0 && (
                         <div className="pt-2 border-t border-[#E8ECE9]">
                           <div className="text-[10px] font-bold text-[#758079] uppercase tracking-wider px-2 mb-1.5">
                             Matched Audit Events ({searchResults.audit_events.length})
@@ -970,15 +979,17 @@ export default function FedCreditXDashboard() {
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setActiveScreen("audit")}
-                      className="py-2.5 px-5 bg-white hover:bg-[#F7F8F7] border border-[#E8ECE9] text-[#111713] font-bold rounded-full text-xs shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <IconAudit className="w-3.5 h-3.5 text-[#758079]" />
-                      Audit Trail
-                    </button>
-                  </div>
+                  {currentUser?.role === "risk_auditor" && (
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => setActiveScreen("audit")}
+                        className="py-2.5 px-5 bg-white hover:bg-[#F7F8F7] border border-[#E8ECE9] text-[#111713] font-bold rounded-full text-xs shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <IconAudit className="w-3.5 h-3.5 text-[#758079]" />
+                        Audit Trail
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* 2. Top 4 Metric Cards */}
@@ -1627,7 +1638,26 @@ export default function FedCreditXDashboard() {
             {/* SCREEN C: AUDIT LOGS (Auditors & Admins View)             */}
             {/* ========================================================= */}
             {activeScreen === "audit" && (
-              <div className="space-y-6">
+              currentUser?.role !== "risk_auditor" ? (
+                <div className="bg-white rounded-3xl p-8 border border-[#E8ECE9] shadow-sm text-center max-w-xl mx-auto space-y-4 my-10">
+                  <div className="w-14 h-14 rounded-full bg-[#FEF2F2] text-[#DC2626] flex items-center justify-center mx-auto">
+                    <IconShield className="w-7 h-7" />
+                  </div>
+                  <h2 className="text-xl font-black text-[#111713]">
+                    Auditor Access Required
+                  </h2>
+                  <p className="text-xs text-[#758079] leading-relaxed">
+                    The immutable decision audit trail is restricted exclusively to supervisory Risk Auditors and Compliance Officers. Underwriting officers perform credit scoring and decision submissions in the workspace.
+                  </p>
+                  <button
+                    onClick={() => setActiveScreen("decision")}
+                    className="py-2.5 px-6 bg-[#123F36] hover:bg-[#1a5549] text-white text-xs font-bold rounded-full shadow-sm transition cursor-pointer"
+                  >
+                    Return to Underwriting Workspace
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
                     <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#111713]">
@@ -1785,7 +1815,8 @@ export default function FedCreditXDashboard() {
                   </div>
                 </div>
               </div>
-            )}
+            )
+          )}
 
             {/* ========================================================= */}
             {/* SCREEN D: FEDERATION LAB (Flower Simulation)              */}

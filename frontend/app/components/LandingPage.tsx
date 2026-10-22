@@ -11,6 +11,7 @@ import {
 } from "./Icons";
 import {
   signInWithGoogle,
+  signInWithGooglePopup,
   GOOGLE_INSTITUTIONAL_ACCOUNTS,
   FirebaseUser,
 } from "../lib/firebase";
@@ -43,12 +44,31 @@ function GoogleLogo({ className = "w-5 h-5" }: { className?: string }) {
 }
 
 export function LandingPage({ onAuthenticated }: LandingPageProps) {
+  const [selectedRole, setSelectedRole] = useState<"bank_officer" | "risk_auditor">("bank_officer");
   const [customEmail, setCustomEmail] = useState("");
   const [customName, setCustomName] = useState("");
   const [customRole, setCustomRole] = useState<"bank_officer" | "risk_auditor">("bank_officer");
   const [showCustomGoogle, setShowCustomGoogle] = useState(false);
   const [loading, setLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Official Firebase Google Popup Sign-In
+  const handleRealGooglePopup = async () => {
+    setAuthError(null);
+    setLoading(true);
+    try {
+      const user = await signInWithGooglePopup(selectedRole);
+      onAuthenticated(user);
+    } catch (err: any) {
+      if (err.code === "auth/popup-closed-by-user") {
+        setAuthError("Sign-in cancelled. Please click 'Sign In with Google' again or select a profile below.");
+      } else {
+        setAuthError(err.message || "Failed to authenticate with Google. You can also use the 1-click profiles below.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleGoogleAccountLogin = async (acc: (typeof GOOGLE_INSTITUTIONAL_ACCOUNTS)[0]) => {
     setAuthError(null);
@@ -98,37 +118,32 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
             </div>
             <div>
               <div className="text-base font-black tracking-tight text-[#111713] flex items-center gap-1.5">
-                FedCreditX
-                <span className="w-1.5 h-1.5 rounded-full bg-[#238354]"></span>
+                <span>FedCreditX</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#E7F3EB] text-[#123F36] font-bold">
+                  FL + DP CREDIT ENGINE
+                </span>
               </div>
-              <div className="text-[11px] text-[#758079] font-medium leading-none">
-                Privacy-Aware Collaborative Credit Intelligence
+              <div className="text-[11px] text-[#758079]">
+                Privacy-Aware Collaborative Underwriting
               </div>
             </div>
           </div>
 
-          <div className="hidden md:flex items-center gap-3">
-            <span className="px-3 py-1 rounded-full bg-[#E7F3EB] text-[#123F36] text-xs font-semibold">
-              FL + DP Logistic Regression
-            </span>
-            <span className="px-3 py-1 rounded-full bg-[#E7F3EB] text-[#123F36] text-xs font-semibold">
-              SHAP Explanations
-            </span>
-            <span className="px-3 py-1 rounded-full bg-[#E7F3EB] text-[#123F36] text-xs font-semibold">
-              Decision Tree Baseline
-            </span>
+          <div className="hidden md:flex items-center gap-6 text-xs font-semibold text-[#758079]">
+            <a href="#pillars" className="hover:text-[#111713] transition">Architecture</a>
+            <a href="#compliance" className="hover:text-[#111713] transition">Supervisory Trust</a>
+            <span className="w-1 h-1 rounded-full bg-[#E8ECE9]"></span>
+            <span className="text-[#238354] font-bold">Production Ready</span>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                const el = document.getElementById("auth-portal-card");
-                el?.scrollIntoView({ behavior: "smooth" });
-              }}
+              onClick={handleRealGooglePopup}
+              disabled={loading}
               className="py-2 px-5 bg-[#123F36] hover:bg-[#1b5549] text-white font-bold text-xs rounded-full shadow-sm transition cursor-pointer flex items-center gap-2"
             >
               <GoogleLogo className="w-4 h-4" />
-              <span>Google Login</span>
+              <span>Sign In with Google</span>
             </button>
           </div>
         </div>
@@ -156,7 +171,7 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
             </p>
 
             {/* 3 Value Pillars */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-2">
+            <div id="pillars" className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-2">
               <div className="bg-white rounded-2xl p-4 border border-[#E8ECE9] shadow-xs space-y-1">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">Pillar 01</div>
                 <div className="text-xs font-bold text-[#111713]">FL + Differential Privacy</div>
@@ -171,19 +186,19 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
 
               <div className="bg-white rounded-2xl p-4 border border-[#E8ECE9] shadow-xs space-y-1">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">Pillar 03</div>
-                <div className="text-xs font-bold text-[#111713]">Approval Tracking & Audit</div>
-                <p className="text-[11px] text-[#758079]">Human underwriting escalation to senior officers with SQLite audit trail.</p>
+                <div className="text-xs font-bold text-[#111713]">Role-Based Governance</div>
+                <p className="text-[11px] text-[#758079]">Strict separation between Underwriting Officers and Supervisory Auditors.</p>
               </div>
             </div>
           </div>
 
           {/* Right Column: Google Authentication Card */}
           <div className="lg:col-span-5" id="auth-portal-card">
-            <div className="bg-white rounded-[28px] p-6 sm:p-8 border border-[#E8ECE9] shadow-xl shadow-black/5 space-y-6">
+            <div className="bg-white rounded-[28px] p-6 sm:p-8 border border-[#E8ECE9] shadow-xl shadow-black/5 space-y-5">
               <div>
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">
-                    Google Authentication
+                    Firebase Authentication
                   </span>
                   <span className="w-2 h-2 rounded-full bg-[#238354]"></span>
                 </div>
@@ -191,25 +206,78 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
                   Sign In with Google
                 </h2>
                 <p className="text-xs text-[#758079] mt-0.5">
-                  Sign in using your authorized institutional Google account to access the credit engine.
+                  Connect your Google account to access your assigned institutional role.
                 </p>
               </div>
 
-              {/* Verified Institutional Google Accounts */}
-              <div className="space-y-3">
-                <div className="text-[11px] font-bold text-[#758079] uppercase tracking-wider">
-                  Verified Institutional Google Accounts
+              {/* 1. Official Google Sign-In Popup */}
+              <div className="space-y-3 p-4 rounded-2xl bg-[#F7F9F8] border border-[#E8ECE9]">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-[#758079] uppercase tracking-wider block">
+                    Choose Your Role For This Session
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRole("bank_officer")}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition text-center cursor-pointer ${
+                        selectedRole === "bank_officer"
+                          ? "bg-[#123F36] text-white border-[#123F36] shadow-xs"
+                          : "bg-white text-[#758079] border-[#E8ECE9] hover:text-[#111713]"
+                      }`}
+                    >
+                      Bank Officer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRole("risk_auditor")}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition text-center cursor-pointer ${
+                        selectedRole === "risk_auditor"
+                          ? "bg-[#123F36] text-white border-[#123F36] shadow-xs"
+                          : "bg-white text-[#758079] border-[#E8ECE9] hover:text-[#111713]"
+                      }`}
+                    >
+                      Risk Auditor
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-[#758079] mt-1">
+                    {selectedRole === "bank_officer"
+                      ? "• Bank Officers evaluate applications, score risk, and confirm decisions."
+                      : "• Risk Auditors have exclusive access to Immutable Decision Audit Logs."}
+                  </p>
                 </div>
 
+                <button
+                  type="button"
+                  onClick={handleRealGooglePopup}
+                  disabled={loading}
+                  className="w-full py-3 px-4 bg-white hover:bg-[#F2F5F3] border-2 border-[#123F36] text-[#111713] rounded-xl transition flex items-center justify-center gap-3 font-bold text-xs sm:text-sm shadow-sm hover:shadow-md cursor-pointer group"
+                >
+                  <GoogleLogo className="w-5 h-5 shrink-0" />
+                  <span>{loading ? "Connecting to Google..." : "Sign In with Google"}</span>
+                </button>
+              </div>
+
+              {/* Separator */}
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-[#E8ECE9]"></div>
+                <span className="flex-shrink mx-3 text-[10px] font-bold text-[#758079] uppercase tracking-wider">
+                  Or 1-Click Institutional Demo Profiles
+                </span>
+                <div className="flex-grow border-t border-[#E8ECE9]"></div>
+              </div>
+
+              {/* Verified Institutional Google Accounts */}
+              <div className="space-y-2.5">
                 {GOOGLE_INSTITUTIONAL_ACCOUNTS.map((acc) => (
                   <button
                     key={acc.email}
                     onClick={() => handleGoogleAccountLogin(acc)}
                     disabled={loading}
-                    className="w-full p-3.5 bg-white hover:bg-[#F7F9F8] border border-[#E8ECE9] hover:border-[#123F36] rounded-2xl transition flex items-center justify-between group cursor-pointer text-left shadow-xs"
+                    className="w-full p-3 bg-white hover:bg-[#F7F9F8] border border-[#E8ECE9] hover:border-[#123F36] rounded-2xl transition flex items-center justify-between group cursor-pointer text-left shadow-xs"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-[#E7F3EB] text-[#123F36] font-bold text-xs flex items-center justify-center border border-[#C5E4D1] shrink-0">
+                      <div className="w-9 h-9 rounded-full bg-[#E7F3EB] text-[#123F36] font-bold text-xs flex items-center justify-center border border-[#C5E4D1] shrink-0">
                         {acc.avatar}
                       </div>
                       <div>
@@ -226,8 +294,8 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
                         <div className="text-[11px] text-[#758079] truncate">{acc.email}</div>
                       </div>
                     </div>
-                    <div className="w-8 h-8 rounded-full bg-white border border-[#E8ECE9] flex items-center justify-center group-hover:bg-[#123F36] group-hover:text-white transition shrink-0">
-                      <GoogleLogo className="w-4 h-4" />
+                    <div className="w-7 h-7 rounded-full bg-white border border-[#E8ECE9] flex items-center justify-center group-hover:bg-[#123F36] group-hover:text-white transition shrink-0">
+                      <GoogleLogo className="w-3.5 h-3.5" />
                     </div>
                   </button>
                 ))}
@@ -236,13 +304,13 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
               {/* Custom Google Workspace Account Toggle */}
               <div className="pt-2 border-t border-[#E8ECE9] space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-[#758079]">Need to sign in with another Google email?</span>
+                  <span className="text-xs text-[#758079]">Need to sign in with another email?</span>
                   <button
                     type="button"
                     onClick={() => setShowCustomGoogle(!showCustomGoogle)}
                     className="text-xs font-bold text-[#123F36] hover:underline cursor-pointer"
                   >
-                    {showCustomGoogle ? "Hide form" : "Use other Google Account"}
+                    {showCustomGoogle ? "Hide form" : "Enter email directly"}
                   </button>
                 </div>
 
@@ -300,60 +368,47 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
                   {authError}
                 </div>
               )}
-
-              {/* Secure Auth Notice */}
-              <div className="pt-2 border-t border-[#E8ECE9] text-[11px] text-[#758079] flex items-center gap-2">
-                <IconShield className="w-3.5 h-3.5 text-[#123F36] shrink-0" />
-                <span>Protected by Google Identity with role-based access control.</span>
-              </div>
             </div>
           </div>
         </div>
 
-        {/* 3 Core Architecture Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-6">
-          <div className="bg-white rounded-[24px] p-6 border border-[#E8ECE9] shadow-xs space-y-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#E7F3EB] text-[#123F36] flex items-center justify-center">
-              <IconLab className="w-5 h-5" />
+        {/* Feature Grid / Trust Section */}
+        <section id="compliance" className="pt-10 border-t border-[#E8ECE9] grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="p-5 rounded-3xl bg-[#F7F9F8] border border-[#E8ECE9] space-y-2">
+            <div className="w-8 h-8 rounded-full bg-[#E7F3EB] text-[#123F36] flex items-center justify-center font-bold text-xs">
+              01
             </div>
-            <h3 className="text-base font-bold text-[#111713]">FL + Differential Privacy</h3>
+            <h3 className="font-extrabold text-sm text-[#111713]">Federated Privacy Preservation</h3>
             <p className="text-xs text-[#758079] leading-relaxed">
-              Decentralized Flower FedAvg simulation with Opacus Differential Privacy clipping. Partitions remain locally on disk.
+              Applicant data never leaves participating bank boundaries. Only DP-clipped gradient weights are shared for model updates.
             </p>
           </div>
 
-          <div className="bg-white rounded-[24px] p-6 border border-[#E8ECE9] shadow-xs space-y-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#E7F3EB] text-[#123F36] flex items-center justify-center">
-              <IconTree className="w-5 h-5" />
+          <div className="p-5 rounded-3xl bg-[#F7F9F8] border border-[#E8ECE9] space-y-2">
+            <div className="w-8 h-8 rounded-full bg-[#E7F3EB] text-[#123F36] flex items-center justify-center font-bold text-xs">
+              02
             </div>
-            <h3 className="text-base font-bold text-[#111713]">SHAP & Tree Baseline</h3>
+            <h3 className="font-extrabold text-sm text-[#111713]">SHAP Explainability & Trust</h3>
             <p className="text-xs text-[#758079] leading-relaxed">
-              Real individual feature contributions computed via LinearSHAP, compared against an interpretable Decision Tree baseline.
+              Transparent credit scores accompanied by exact SHAP attributions, highlighting top positive and negative drivers of risk.
             </p>
           </div>
 
-          <div className="bg-white rounded-[24px] p-6 border border-[#E8ECE9] shadow-xs space-y-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#E7F3EB] text-[#123F36] flex items-center justify-center">
-              <IconAudit className="w-5 h-5" />
+          <div className="p-5 rounded-3xl bg-[#F7F9F8] border border-[#E8ECE9] space-y-2">
+            <div className="w-8 h-8 rounded-full bg-[#E7F3EB] text-[#123F36] flex items-center justify-center font-bold text-xs">
+              03
             </div>
-            <h3 className="text-base font-bold text-[#111713]">Approval Tracking</h3>
+            <h3 className="font-extrabold text-sm text-[#111713]">Role-Based Audit Isolation</h3>
             <p className="text-xs text-[#758079] leading-relaxed">
-              Senior underwriting escalation, status tracking, and full decision audit events persisted to SQLite.
+              Audit trails are isolated to compliance auditors to maintain operational segregation of duties from underwriting officers.
             </p>
           </div>
-        </div>
+        </section>
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-[#E8ECE9] bg-white py-6 px-6 text-center text-xs text-[#758079]">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="font-semibold text-[#111713]">
-            FedCreditX — Privacy-Aware Collaborative Credit Intelligence
-          </div>
-          <div>
-            Decentralized Lenders &bull; FL + DP Logistic Regression &bull; SHAP Explainability &bull; Human Underwriting
-          </div>
-        </div>
+      <footer className="border-t border-[#E8ECE9] py-6 px-6 sm:px-10 text-center text-xs text-[#758079] bg-white">
+        <p>FedCreditX &bull; Privacy-Aware Collaborative Credit Intelligence Platform &bull; Research-Grade Demonstration</p>
       </footer>
     </div>
   );
