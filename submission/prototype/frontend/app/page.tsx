@@ -21,6 +21,8 @@ import {
 } from "./components/Icons";
 import { RiskGauge } from "./components/RiskGauge";
 import { LandingPage } from "./components/LandingPage";
+import { RoleSelectModal } from "./components/RoleSelectModal";
+import { useHighlightOnArrive } from "./hooks/useHighlightOnArrive";
 import {
   getCurrentUser,
   signOutUser,
@@ -127,6 +129,31 @@ export default function FedCreditXDashboard() {
   // 1. Authentication State
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [authInitialized, setAuthInitialized] = useState<boolean>(false);
+
+  // Role Selection Modal State (Task 4 & Task 5)
+  const [pendingGoogleUser, setPendingGoogleUser] = useState<{
+    email: string;
+    displayName: string;
+    uid: string;
+    idToken: string;
+    photoURL?: string;
+  } | null>(null);
+  const [roleModalLoading, setRoleModalLoading] = useState<boolean>(false);
+  const [roleModalError, setRoleModalError] = useState<string | null>(null);
+
+  // Highlight hook for Task 2 (3.5s duration, supports prefers-reduced-motion, auto cleanup on unmount)
+  const { triggerHighlight } = useHighlightOnArrive(3500);
+
+  const navigateToAndHighlight = (targetId: string) => {
+    if (activeScreen !== "decision") {
+      setActiveScreen("decision");
+      setTimeout(() => {
+        triggerHighlight(targetId);
+      }, 120);
+    } else {
+      triggerHighlight(targetId);
+    }
+  };
 
   // 2. Navigation & Lender Context State
   const [activeScreen, setActiveScreen] = useState<PrimaryScreen>("decision");
@@ -237,11 +264,71 @@ export default function FedCreditXDashboard() {
 
   const handleSignOut = () => {
     signOutUser();
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("fedcreditx_session_token");
+      localStorage.removeItem("fedcreditx_auth_user");
+    }
     setCurrentUser(null);
+    setPendingGoogleUser(null);
+    setRoleModalError(null);
     setScoredResult(null);
     setAuditEvents([]);
     setCases([]);
     setApprovalsList([]);
+  };
+
+  const handleConfirmRole = async (selectedRole: "bank_officer" | "risk_auditor") => {
+    if (!pendingGoogleUser) return;
+    setRoleModalLoading(true);
+    setRoleModalError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/select-role`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id_token: pendingGoogleUser.idToken,
+          requested_role: selectedRole,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const appUser: FirebaseUser = {
+          uid: pendingGoogleUser.uid,
+          email: data.email,
+          displayName: pendingGoogleUser.displayName,
+          role: data.role === "risk_auditor" ? "risk_auditor" : "bank_officer",
+          idToken: pendingGoogleUser.idToken,
+          photoURL: pendingGoogleUser.photoURL,
+          createdAt: new Date().toISOString(),
+        };
+        if (typeof window !== "undefined") {
+          localStorage.setItem("fedcreditx_auth_user", JSON.stringify(appUser));
+          localStorage.setItem("fedcreditx_session_token", data.session_token);
+        }
+        setCurrentUser(appUser);
+        setPendingGoogleUser(null);
+        setRoleModalError(null);
+      } else if (res.status === 403) {
+        const errData = await res.json().catch(() => ({}));
+        setRoleModalError(
+          errData.detail || "Your account is not approved as Auditor. Contact the administrator."
+        );
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setRoleModalError(errData.detail || "Failed to confirm role with authentication server.");
+      }
+    } catch (err: any) {
+      setRoleModalError(`Network error connecting to backend: ${err.message}`);
+    } finally {
+      setRoleModalLoading(false);
+    }
+  };
+
+  const handleCancelRoleModal = () => {
+    setPendingGoogleUser(null);
+    setRoleModalError(null);
+    handleSignOut();
   };
 
   const checkBackendHealth = async () => {
@@ -327,8 +414,14 @@ export default function FedCreditXDashboard() {
   const fetchMetrics = async () => {
     try {
       const userRole = currentUser?.role || "bank_officer";
+      const sessionToken = typeof window !== "undefined" ? localStorage.getItem("fedcreditx_session_token") : null;
+      const headers: Record<string, string> = { "X-User-Role": userRole };
+      if (sessionToken) {
+        headers["Authorization"] = `Bearer ${sessionToken}`;
+        headers["X-Session-Token"] = sessionToken;
+      }
       const res = await fetch(`${API_BASE}/api/metrics?role=${userRole}`, {
-        headers: { "X-User-Role": userRole },
+        headers,
       });
       if (res.ok) {
         const data = await res.json();
@@ -356,7 +449,14 @@ export default function FedCreditXDashboard() {
       if (filterResourceId) params.append("resource_id", filterResourceId);
       if (filterDecision) params.append("decision", filterDecision);
 
-      const res = await fetch(`${API_BASE}/api/audit?${params.toString()}`);
+      const sessionToken = typeof window !== "undefined" ? localStorage.getItem("fedcreditx_session_token") : null;
+      const headers: Record<string, string> = {};
+      if (sessionToken) {
+        headers["Authorization"] = `Bearer ${sessionToken}`;
+        headers["X-Session-Token"] = sessionToken;
+      }
+
+      const res = await fetch(`${API_BASE}/api/audit?${params.toString()}`, { headers });
       if (res.ok) {
         const data = await res.json();
         setAuditEvents(data);
@@ -374,6 +474,10 @@ export default function FedCreditXDashboard() {
     if (filterActor) params.append("actor", filterActor);
     if (filterResourceId) params.append("resource_id", filterResourceId);
     if (filterDecision) params.append("decision", filterDecision);
+    const sessionToken = typeof window !== "undefined" ? localStorage.getItem("fedcreditx_session_token") : null;
+    if (sessionToken) {
+      params.append("session_token", sessionToken);
+    }
 
     window.open(`${API_BASE}/api/audit/export?${params.toString()}`, "_blank");
   };
@@ -586,7 +690,36 @@ export default function FedCreditXDashboard() {
   }
 
   if (!currentUser) {
-    return <LandingPage onAuthenticated={(user) => setCurrentUser(user)} />;
+    return (
+      <>
+        <LandingPage
+          onGoogleSignIn={(googleUser) => {
+            setPendingGoogleUser(googleUser);
+            setRoleModalError(null);
+          }}
+          onAuthenticated={(user) => {
+            setPendingGoogleUser({
+              email: user.email,
+              displayName: user.displayName,
+              uid: user.uid,
+              idToken: user.idToken || `token_${Date.now()}`,
+              photoURL: user.photoURL,
+            });
+            setRoleModalError(null);
+          }}
+        />
+        {pendingGoogleUser && (
+          <RoleSelectModal
+            userEmail={pendingGoogleUser.email}
+            userDisplayName={pendingGoogleUser.displayName}
+            isLoading={roleModalLoading}
+            errorMessage={roleModalError}
+            onConfirmRole={handleConfirmRole}
+            onCancelOrSignOut={handleCancelRoleModal}
+          />
+        )}
+      </>
+    );
   }
 
   const currentCase = cases.find((c) => c.case_id === selectedCaseId) || cases[0];
@@ -782,12 +915,9 @@ export default function FedCreditXDashboard() {
                 {/* Sign Out Button */}
                 <button
                   onClick={handleSignOut}
-                  className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs font-semibold text-[#CF5555] hover:bg-[#FEF2F2] transition cursor-pointer"
+                  className="w-full flex items-center px-3.5 py-2.5 rounded-2xl text-xs font-semibold text-[#CF5555] hover:bg-[#FEF2F2] transition cursor-pointer"
                 >
-                  <div className="p-1.5 rounded-xl bg-[#FEF2F2] text-[#CF5555]">
-                    <IconX className="w-4 h-4" />
-                  </div>
-                  <span>Sign Out Session</span>
+                  <span>Sign Out</span>
                 </button>
               </div>
             </nav>
@@ -947,15 +1077,6 @@ export default function FedCreditXDashboard() {
                   </div>
                 </div>
               </div>
-
-              {/* Sign Out Button */}
-              <button
-                onClick={handleSignOut}
-                title="Sign Out"
-                className="p-2 rounded-2xl text-[#758079] hover:text-[#CF5555] hover:bg-[#FEF2F2] transition cursor-pointer"
-              >
-                <IconX className="w-4 h-4" />
-              </button>
             </div>
           </header>
 
@@ -975,7 +1096,7 @@ export default function FedCreditXDashboard() {
                       Applicant Credit-Risk Assessment
                     </h1>
                     <p className="text-xs sm:text-sm text-[#758079] mt-1">
-                      Evaluate applicant creditworthiness using collaborative model predictions, inspect SHAP risk drivers, and confirm underwriting decisions.
+                      Evaluate applicant creditworthiness using collaborative model predictions, inspect key risk drivers, and confirm underwriting decisions.
                     </p>
                   </div>
 
@@ -992,9 +1113,22 @@ export default function FedCreditXDashboard() {
                   )}
                 </div>
 
-                {/* 2. Top 4 Metric Cards */}
+                {/* 2. Top 4 Interactive Metric Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="bg-[#123F36] text-white rounded-3xl p-5 shadow-lg flex flex-col justify-between space-y-3">
+                  {/* Card 1: Risk Classification -> target: risk-gauge */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigateToAndHighlight("risk-gauge")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        navigateToAndHighlight("risk-gauge");
+                      }
+                    }}
+                    className="bg-[#123F36] text-white rounded-3xl p-5 shadow-lg flex flex-col justify-between space-y-3 cursor-pointer select-none transition hover:scale-[1.01] active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-[#A5E3C7]"
+                    aria-label="View Risk Classification in Model Risk Gauge"
+                  >
                     <div className="flex justify-between items-start">
                       <span className="text-xs font-semibold text-white/80">Risk Classification</span>
                       <div className="w-7 h-7 rounded-full bg-white/15 flex items-center justify-center text-white">
@@ -1012,7 +1146,20 @@ export default function FedCreditXDashboard() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-3xl p-5 border border-[#E8ECE9] shadow-xs flex flex-col justify-between space-y-3">
+                  {/* Card 2: Active Lender Context -> target: lender-selector */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigateToAndHighlight("lender-selector")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        navigateToAndHighlight("lender-selector");
+                      }
+                    }}
+                    className="bg-white rounded-3xl p-5 border border-[#E8ECE9] shadow-xs flex flex-col justify-between space-y-3 cursor-pointer select-none transition hover:scale-[1.01] active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-[#123F36]"
+                    aria-label="Select Lender Institution"
+                  >
                     <div className="flex justify-between items-start">
                       <span className="text-xs font-semibold text-[#758079]">Active Lender Context</span>
                       <div className="w-7 h-7 rounded-full bg-[#F7F8F7] border border-[#E8ECE9] flex items-center justify-center text-[#111713]">
@@ -1033,7 +1180,20 @@ export default function FedCreditXDashboard() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-3xl p-5 border border-[#E8ECE9] shadow-xs flex flex-col justify-between space-y-3">
+                  {/* Card 3: Est. Default Probability -> target: risk-gauge */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigateToAndHighlight("risk-gauge")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        navigateToAndHighlight("risk-gauge");
+                      }
+                    }}
+                    className="bg-white rounded-3xl p-5 border border-[#E8ECE9] shadow-xs flex flex-col justify-between space-y-3 cursor-pointer select-none transition hover:scale-[1.01] active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-[#123F36]"
+                    aria-label="View Estimated Default Probability in Model Risk Gauge"
+                  >
                     <div className="flex justify-between items-start">
                       <span className="text-xs font-semibold text-[#758079]">Est. Default Probability</span>
                       <div className="w-7 h-7 rounded-full bg-[#F7F8F7] border border-[#E8ECE9] flex items-center justify-center text-[#111713]">
@@ -1052,7 +1212,20 @@ export default function FedCreditXDashboard() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-3xl p-5 border border-[#E8ECE9] shadow-xs flex flex-col justify-between space-y-3">
+                  {/* Card 4: Human Review Status -> target: human-review */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigateToAndHighlight("human-review")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        navigateToAndHighlight("human-review");
+                      }
+                    }}
+                    className="bg-white rounded-3xl p-5 border border-[#E8ECE9] shadow-xs flex flex-col justify-between space-y-3 cursor-pointer select-none transition hover:scale-[1.01] active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-[#123F36]"
+                    aria-label="View Human Underwriting Sign-Off"
+                  >
                     <div className="flex justify-between items-start">
                       <span className="text-xs font-semibold text-[#758079]">Human Review Status</span>
                       <div className="w-7 h-7 rounded-full bg-[#F7F8F7] border border-[#E8ECE9] flex items-center justify-center text-[#111713]">
@@ -1077,7 +1250,7 @@ export default function FedCreditXDashboard() {
                 {/* 3. Main Split Grid (7 cols / 5 cols) */}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                   
-                  {/* Left Column: Applicant Financial Data + SHAP Risk Drivers (7 cols) */}
+                  {/* Left Column: Applicant Financial Data + Key Risk Drivers (7 cols) */}
                   <div className="lg:col-span-7 space-y-6">
                     
                     {/* Card A1: Applicant Selection & Real Financial Metrics */}
@@ -1097,7 +1270,7 @@ export default function FedCreditXDashboard() {
                       </div>
 
                       {/* Segmented Lender Controls */}
-                      <div className="space-y-1.5">
+                      <div id="lender-selector" className="space-y-1.5 scroll-mt-6 p-2 rounded-2xl transition">
                         <label className="text-xs font-semibold text-[#758079]">Select Lender Institution</label>
                         <div className="grid grid-cols-3 gap-2">
                           {(["lender_a", "lender_b", "lender_c"] as const).map((l) => (
@@ -1228,23 +1401,23 @@ export default function FedCreditXDashboard() {
                       )}
                     </div>
 
-                    {/* Card A2: Key Risk Drivers (LinearSHAP) & Baseline Comparison */}
+                    {/* Card A2: Key Risk Drivers & Baseline Comparison */}
                     <div className="bg-white rounded-[24px] p-6 border border-[#E8ECE9] shadow-xs space-y-5">
                       <div className="flex justify-between items-center">
                         <div>
                           <h3 className="text-base font-bold text-[#111713]">Top Risk Drivers & Explanations</h3>
                           <p className="text-xs text-[#758079]">
-                            Individual feature contributions calculated via LinearSHAP on the collaborative model.
+                            Individual feature contributions calculated on the collaborative model.
                           </p>
                         </div>
                         <span className="px-3 py-1 rounded-full bg-[#E7F3EB] text-[#123F36] text-[11px] font-bold">
-                          SHAP Values
+                          Risk Impact
                         </span>
                       </div>
 
                       {scoredResult ? (
                         <div className="space-y-4">
-                          {/* Top 3 SHAP Drivers */}
+                          {/* Top 3 Risk Drivers */}
                           <div className="space-y-2.5">
                             {scoredResult.top_reasons && scoredResult.top_reasons.length > 0 ? (
                               scoredResult.top_reasons.map((r, i) => (
@@ -1314,7 +1487,7 @@ export default function FedCreditXDashboard() {
                           <div className="max-w-xs space-y-1">
                             <div className="text-sm font-bold text-[#111713]">No Assessment Generated</div>
                             <p className="text-xs text-[#758079]">
-                              Select an applicant and click "Score Applicant" to evaluate default probability and view SHAP risk explanations.
+                              Select an applicant and click "Score Applicant" to evaluate default probability and view key risk explanations.
                             </p>
                           </div>
                         </div>
@@ -1325,15 +1498,17 @@ export default function FedCreditXDashboard() {
                   {/* Right Column: Risk Gauge + Human Review Action (5 cols) */}
                   <div className="lg:col-span-5 space-y-6">
                     
-                    {/* Risk Gauge Card */}
-                    <RiskGauge
-                      probability={scoredResult?.default_probability_estimate}
-                      riskBand={scoredResult?.demo_risk_band}
-                      recommendation={scoredResult?.system_recommendation}
-                    />
+                    {/* Risk Gauge Card (Target ID: risk-gauge) */}
+                    <div id="risk-gauge" className="scroll-mt-6">
+                      <RiskGauge
+                        probability={scoredResult?.default_probability_estimate}
+                        riskBand={scoredResult?.demo_risk_band}
+                        recommendation={scoredResult?.system_recommendation}
+                      />
+                    </div>
 
-                    {/* Human Underwriting Sign-Off Card */}
-                    <div className="bg-white rounded-[24px] p-6 border border-[#E8ECE9] shadow-xs space-y-4">
+                    {/* Human Underwriting Sign-Off Card (Target ID: human-review) */}
+                    <div id="human-review" className="bg-white rounded-[24px] p-6 border border-[#E8ECE9] shadow-xs space-y-4 scroll-mt-6">
                       <div>
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">
@@ -2051,7 +2226,7 @@ export default function FedCreditXDashboard() {
                   <div className="bg-white rounded-[24px] p-6 border border-[#E8ECE9] shadow-xs space-y-3">
                     <h3 className="text-base font-bold text-[#111713]">Explainable AI & Auditing</h3>
                     <p className="text-xs text-[#758079] leading-relaxed">
-                      All predictions are accompanied by exact SHAP risk attributions and compared with an interpretable Decision Tree baseline, ensuring regulatory transparency under human underwriting oversight.
+                      All predictions are accompanied by exact key risk attributions and compared with an interpretable Decision Tree baseline, ensuring regulatory transparency under human underwriting oversight.
                     </p>
                   </div>
                 </div>

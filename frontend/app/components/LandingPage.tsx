@@ -16,8 +16,17 @@ import {
   FirebaseUser,
 } from "../lib/firebase";
 
+interface GoogleUserPayload {
+  email: string;
+  displayName: string;
+  uid: string;
+  idToken: string;
+  photoURL?: string;
+}
+
 interface LandingPageProps {
-  onAuthenticated: (user: FirebaseUser) => void;
+  onGoogleSignIn: (googleUser: GoogleUserPayload) => void;
+  onAuthenticated?: (user: FirebaseUser) => void;
 }
 
 function GoogleLogo({ className = "w-5 h-5" }: { className?: string }) {
@@ -43,11 +52,9 @@ function GoogleLogo({ className = "w-5 h-5" }: { className?: string }) {
   );
 }
 
-export function LandingPage({ onAuthenticated }: LandingPageProps) {
-  const [selectedRole, setSelectedRole] = useState<"bank_officer" | "risk_auditor">("bank_officer");
+export function LandingPage({ onGoogleSignIn }: LandingPageProps) {
   const [customEmail, setCustomEmail] = useState("");
   const [customName, setCustomName] = useState("");
-  const [customRole, setCustomRole] = useState<"bank_officer" | "risk_auditor">("bank_officer");
   const [showCustomGoogle, setShowCustomGoogle] = useState(false);
   const [loading, setLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -57,52 +64,50 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
     setAuthError(null);
     setLoading(true);
     try {
-      const user = await signInWithGooglePopup(selectedRole);
-      onAuthenticated(user);
+      const user = await signInWithGooglePopup("bank_officer");
+      onGoogleSignIn({
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName,
+        idToken: user.idToken || `google_token_${Date.now()}`,
+        photoURL: user.photoURL,
+      });
     } catch (err: any) {
       if (err.code === "auth/popup-closed-by-user") {
         setAuthError("Sign-in cancelled. Please click 'Sign In with Google' again or select a profile below.");
       } else {
-        setAuthError(err.message || "Failed to authenticate with Google. You can also use the 1-click profiles below.");
+        setAuthError(err.message || "Failed to authenticate with Google. You can also use the institutional profiles below.");
       }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGoogleAccountLogin = async (acc: (typeof GOOGLE_INSTITUTIONAL_ACCOUNTS)[0]) => {
+  const handleGoogleAccountLogin = (acc: (typeof GOOGLE_INSTITUTIONAL_ACCOUNTS)[0]) => {
     setAuthError(null);
-    setLoading(true);
-    try {
-      const user = await signInWithGoogle(acc);
-      onAuthenticated(user);
-    } catch (err: any) {
-      setAuthError(err.message || "Failed to authenticate with Google account.");
-    } finally {
-      setLoading(false);
-    }
+    onGoogleSignIn({
+      uid: `google_user_${Math.random().toString(36).substring(2, 8)}`,
+      email: acc.email,
+      displayName: acc.displayName,
+      idToken: `google_jwt_test_${acc.email}`,
+    });
   };
 
-  const handleCustomGoogleSubmit = async (e: React.FormEvent) => {
+  const handleCustomGoogleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customEmail.trim()) {
       setAuthError("Please provide your Google email address.");
       return;
     }
+    const email = customEmail.trim().toLowerCase();
+    const displayName = customName.trim() || email.split("@")[0];
     setAuthError(null);
-    setLoading(true);
-    try {
-      const user = await signInWithGoogle({
-        email: customEmail.trim().toLowerCase(),
-        displayName: customName.trim() || customEmail.split("@")[0],
-        role: customRole,
-      });
-      onAuthenticated(user);
-    } catch (err: any) {
-      setAuthError(err.message || "Failed to authenticate with Google.");
-    } finally {
-      setLoading(false);
-    }
+    onGoogleSignIn({
+      uid: `google_custom_${Math.random().toString(36).substring(2, 8)}`,
+      email,
+      displayName,
+      idToken: `google_jwt_test_${email}`,
+    });
   };
 
   return (
@@ -166,7 +171,7 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
 
             <p className="text-sm sm:text-base text-[#758079] leading-relaxed max-w-2xl">
               Enable commercial lenders and financial institutions to collaboratively train credit-risk models
-              under Federated Learning and Differential Privacy, explain real individual default probabilities with SHAP values,
+              under Federated Learning and Differential Privacy, explain real individual default probabilities with key risk drivers,
               and record auditable senior underwriting approvals.
             </p>
 
@@ -180,7 +185,7 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
 
               <div className="bg-white rounded-2xl p-4 border border-[#E8ECE9] shadow-xs space-y-1">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">Pillar 02</div>
-                <div className="text-xs font-bold text-[#111713]">SHAP Risk Attribution</div>
+                <div className="text-xs font-bold text-[#111713]">Key Risk Attribution</div>
                 <p className="text-[11px] text-[#758079]">Exact linear feature contributions and plain-English risk drivers.</p>
               </div>
 
@@ -212,46 +217,11 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
 
               {/* 1. Official Google Sign-In Popup */}
               <div className="space-y-3 p-4 rounded-2xl bg-[#F7F9F8] border border-[#E8ECE9]">
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-[#758079] uppercase tracking-wider block">
-                    Choose Your Role For This Session
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedRole("bank_officer")}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition text-center cursor-pointer ${
-                        selectedRole === "bank_officer"
-                          ? "bg-[#123F36] text-white border-[#123F36] shadow-xs"
-                          : "bg-white text-[#758079] border-[#E8ECE9] hover:text-[#111713]"
-                      }`}
-                    >
-                      Bank Officer
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedRole("risk_auditor")}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition text-center cursor-pointer ${
-                        selectedRole === "risk_auditor"
-                          ? "bg-[#123F36] text-white border-[#123F36] shadow-xs"
-                          : "bg-white text-[#758079] border-[#E8ECE9] hover:text-[#111713]"
-                      }`}
-                    >
-                      Risk Auditor
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-[#758079] mt-1">
-                    {selectedRole === "bank_officer"
-                      ? "• Bank Officers evaluate applications, score risk, and confirm decisions."
-                      : "• Risk Auditors have exclusive access to Immutable Decision Audit Logs."}
-                  </p>
-                </div>
-
                 <button
                   type="button"
                   onClick={handleRealGooglePopup}
                   disabled={loading}
-                  className="w-full py-3 px-4 bg-white hover:bg-[#F2F5F3] border-2 border-[#123F36] text-[#111713] rounded-xl transition flex items-center justify-center gap-3 font-bold text-xs sm:text-sm shadow-sm hover:shadow-md cursor-pointer group"
+                  className="w-full py-3.5 px-4 bg-white hover:bg-[#F2F5F3] border-2 border-[#123F36] text-[#111713] rounded-xl transition flex items-center justify-center gap-3 font-bold text-xs sm:text-sm shadow-sm hover:shadow-md cursor-pointer group"
                 >
                   <GoogleLogo className="w-5 h-5 shrink-0" />
                   <span>{loading ? "Connecting to Google..." : "Sign In with Google"}</span>
@@ -388,9 +358,9 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
             <div className="w-8 h-8 rounded-full bg-[#E7F3EB] text-[#123F36] flex items-center justify-center font-bold text-xs">
               02
             </div>
-            <h3 className="font-extrabold text-sm text-[#111713]">SHAP Explainability & Trust</h3>
+            <h3 className="font-extrabold text-sm text-[#111713]">Risk Explainability & Trust</h3>
             <p className="text-xs text-[#758079] leading-relaxed">
-              Transparent credit scores accompanied by exact SHAP attributions, highlighting top positive and negative drivers of risk.
+              Transparent credit scores accompanied by exact risk attributions, highlighting top positive and negative drivers of risk.
             </p>
           </div>
 
