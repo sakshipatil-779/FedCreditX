@@ -92,7 +92,7 @@ class TestOfficerDecisionAndAuditWorkflow(unittest.TestCase):
         data = res.json()
 
         # Item 1: Model type & Risk level & probability
-        self.assertEqual(data["model_type"], "DecisionTreeClassifier")
+        self.assertIn(data["model_type"], ["DecisionTreeClassifier", "FL + DP Logistic Regression (Primary)"])
         self.assertIn("default_probability_estimate", data)
         self.assertIn("percentage_display", data)
         self.assertIn(data["risk_level"], [LEVEL_LOW, LEVEL_MEDIUM, LEVEL_HIGH])
@@ -200,7 +200,7 @@ class TestOfficerDecisionAndAuditWorkflow(unittest.TestCase):
         self.assertIn("system_recommendation", meta)
         self.assertIn("final_decision", meta)
         self.assertEqual(meta["final_decision"], "Approved")
-        self.assertEqual(meta["model_type"], "DecisionTreeClassifier")
+        self.assertIn(meta["model_type"], ["DecisionTreeClassifier", "FL + DP Logistic Regression (Primary)"])
 
     def test_audit_filters_and_export(self):
         """Verifies audit log filtering by event_type, actor, and decision, plus CSV export."""

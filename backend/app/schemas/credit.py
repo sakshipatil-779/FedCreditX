@@ -138,3 +138,17 @@ class AuditEvent(BaseModel):
     entity_id: str
     status: str
     safe_metadata: Dict[str, Any]
+
+
+class RoleSelectionRequest(BaseModel):
+    id_token: str
+    requested_role: str
+
+
+class RoleSelectionResponse(BaseModel):
+    status: str
+    session_token: str
+    email: str
+    role: str
+    expires_at: str
+
