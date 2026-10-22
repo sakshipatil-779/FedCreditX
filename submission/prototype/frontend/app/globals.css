@@ -57,3 +57,29 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #176B4D;
 }
+
+/* Accessible Target Element Highlight (Task 2) */
+.target-highlight {
+  outline: 3px solid var(--brand-green) !important;
+  outline-offset: 4px !important;
+  box-shadow: 0 0 0 6px var(--accent-light), 0 0 24px rgba(23, 107, 77, 0.4) !important;
+  animation: target-pulse 1.2s ease-in-out infinite alternate;
+  transition: all 0.4s ease-in-out;
+  border-radius: 1.5rem;
+}
+
+@keyframes target-pulse {
+  0% {
+    box-shadow: 0 0 0 4px var(--accent-light), 0 0 10px rgba(23, 107, 77, 0.25);
+  }
+  100% {
+    box-shadow: 0 0 0 8px var(--accent-light), 0 0 28px rgba(23, 107, 77, 0.55);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .target-highlight {
+    animation: none !important;
+    box-shadow: 0 0 0 6px var(--accent-light), 0 0 12px rgba(23, 107, 77, 0.3) !important;
+  }
+}
