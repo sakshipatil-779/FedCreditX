@@ -321,29 +321,170 @@ def start_flower_grpc_server(
     )
 
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def get_last_log_lines(filepath: str, n: int = 50) -> List[str]:
+    """Retrieves up to the last n lines from a log file."""
+    if not os.path.exists(filepath):
+        return []
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+            return [l.rstrip() for l in lines[-n:]]
+    except Exception:
+        return []
+
+
+def is_port_in_use(host: str, port: int) -> bool:
+    """Checks whether a local port is already bound."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            return False
+        except OSError:
+            return True
+
+
+def aggregate_weighted_fedavg(
+    client_updates: List[Dict[str, Any]],
+) -> Tuple[np.ndarray, float]:
+    """
+    Weighted Federated Averaging across client updates according to sample counts.
+    Each update contains: 'weights' (np.ndarray or list), 'bias' (float), 'num_samples' (int).
+    Returns (aggregated_weights, aggregated_bias).
+    """
+    total_samples = sum(u["num_samples"] for u in client_updates)
+    if total_samples <= 0:
+        raise ValueError("Total samples across updates must be greater than zero.")
+
+    first_w = np.array(client_updates[0]["weights"], dtype=np.float64).flatten()
+    agg_weights = np.zeros_like(first_w, dtype=np.float64)
+    agg_bias = 0.0
+
+    for u in client_updates:
+        weight_factor = float(u["num_samples"]) / float(total_samples)
+        w_vec = np.array(u["weights"], dtype=np.float64).flatten()
+        agg_weights += weight_factor * w_vec
+        agg_bias += weight_factor * float(u["bias"])
+
+    return agg_weights.astype(np.float32), float(agg_bias)
+
+
+def compute_simulated_partner_update(
+    partner_id: str,
+    global_weights: np.ndarray,
+    global_bias: float,
+    data_dir: str,
+    local_epochs: int = 1,
+    learning_rate: float = 0.05,
+    use_dp: bool = False,
+) -> Dict[str, Any]:
+    """
+    Generates a genuine local update for a simulated partner lender from its local partition.
+    Used during collaborative rounds when live officers submit updates.
+    """
+    csv_path = os.path.join(data_dir, partner_id, "train.csv")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Training partition missing for partner {partner_id} at {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    prep_path = os.path.join(data_dir, "preprocessor.json")
+    if os.path.exists(prep_path):
+        preprocessor = FeaturePreprocessor.load(prep_path)
+    else:
+        preprocessor = FeaturePreprocessor().fit(df)
+
+    X_train = preprocessor.transform(df)
+    y_train = df[TARGET_NAME].values.astype(np.float32)
+
+    X_t = torch.from_numpy(X_train)
+    y_t = torch.from_numpy(y_train)
+
+    local_model = LogisticRegressionCreditModel(in_features=len(FEATURE_NAMES))
+    local_model.set_weights_and_bias(global_weights, global_bias)
+
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.SGD(local_model.parameters(), lr=learning_rate)
+
+    local_model.train()
+    dataset = torch.utils.data.TensorDataset(X_t, y_t)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
+
+    for _ in range(local_epochs):
+        for bx, by in loader:
+            optimizer.zero_grad()
+            logits = local_model(bx)
+            loss = criterion(logits, by)
+            loss.backward()
+            optimizer.step()
+
+    w, b = local_model.get_weights_and_bias()
+    return {
+        "lender_id": partner_id,
+        "weights": w.tolist(),
+        "bias": float(b),
+        "num_samples": len(df),
+        "steps": len(loader) * local_epochs,
+        "is_simulated": True,
+    }
+
+
 def run_genuine_flower_grpc(
     num_rounds: int = 1,
     server_address: str = "127.0.0.1:8089",
-    data_dir: str = "backend/local_data",
+    data_dir: Optional[str] = None,
     local_epochs: int = 1,
     client_ids: Optional[List[str]] = None,
-    timeout: float = 30.0,
+    server_readiness_timeout: float = 60.0,
+    client_timeout: float = 300.0,
+    timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Executes authentic Flower server/client orchestration over gRPC across independent processes.
-    Demonstrates genuine Flower communication, aggregation, and round completion (FR-04).
+    Replaces subprocess.PIPE with dedicated log files, checks for port conflicts, uses project-root
+    path resolution, and returns structured failure diagnostics.
     """
     import subprocess
     import socket
     import time
+    from pathlib import Path
+
+    if timeout is not None:
+        client_timeout = timeout
 
     if client_ids is None:
         client_ids = ["lender_a", "lender_b", "lender_c"]
 
-    host, port = server_address.split(":")
-    port_int = int(port)
+    # Resolve paths relative to project root
+    resolved_root = Path(PROJECT_ROOT)
+    resolved_data_dir = str(resolved_root / "backend" / "local_data") if data_dir is None else (
+        str(Path(data_dir).resolve()) if os.path.isabs(data_dir) else str(resolved_root / data_dir)
+    )
 
-    # 1. Start Flower Server process
+    logs_dir = resolved_root / "logs"
+    os.makedirs(logs_dir, exist_ok=True)
+    server_log_path = str(logs_dir / "fl_server.log")
+
+    host, port_str = server_address.split(":")
+    port_int = int(port_str)
+
+    # 1. Detect if port is already bound
+    if is_port_in_use(host, port_int):
+        err_msg = f"gRPC port {port_int} on {host} is already in use by another process."
+        return {
+            "status": "failed",
+            "failed_step": "server_start",
+            "message": err_msg,
+            "last_50_log_lines": [err_msg],
+            "client_returncodes": {},
+            "server_returncode": -1,
+            "rounds_completed": 0,
+        }
+
+    # 2. Start Flower Server with dedicated log file
     server_cmd = [
         sys.executable,
         "-m",
@@ -357,32 +498,70 @@ def run_genuine_flower_grpc(
         "--min-clients",
         str(len(client_ids)),
     ]
-    server_proc = subprocess.Popen(
-        server_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
 
-    # 2. Wait for server socket to accept connections
+    server_log_file = open(server_log_path, "w", encoding="utf-8")
+    try:
+        server_proc = subprocess.Popen(
+            server_cmd,
+            stdout=server_log_file,
+            stderr=subprocess.STDOUT,
+            cwd=str(resolved_root),
+        )
+    except Exception as e:
+        server_log_file.close()
+        return {
+            "status": "failed",
+            "failed_step": "server_start",
+            "message": f"Failed to spawn Flower server process: {str(e)}",
+            "last_50_log_lines": [str(e)],
+            "client_returncodes": {},
+            "server_returncode": -1,
+            "rounds_completed": 0,
+        }
+
+    # 3. Wait for server socket to accept connections
     server_ready = False
     start_wait = time.time()
-    while time.time() - start_wait < 10.0:
+    while time.time() - start_wait < server_readiness_timeout:
+        # Check if process died prematurely
+        if server_proc.poll() is not None:
+            break
         try:
             with socket.create_connection((host, port_int), timeout=0.5):
                 server_ready = True
                 break
         except (OSError, ConnectionRefusedError):
-            time.sleep(0.2)
+            time.sleep(0.3)
 
     if not server_ready:
-        server_proc.kill()
-        out, err = server_proc.communicate()
-        raise RuntimeError(f"Flower gRPC server failed to start on {server_address}. Stderr: {err}")
+        if server_proc.poll() is None:
+            server_proc.kill()
+        server_proc.wait()
+        server_log_file.close()
+        last_lines = get_last_log_lines(server_log_path, 50)
+        combined = " ".join(last_lines).lower()
+        failed_step = "out_of_memory" if ("memory" in combined or "oom" in combined) else "server_start"
+        return {
+            "status": "failed",
+            "failed_step": failed_step,
+            "message": f"Flower gRPC server failed to start on {server_address} within {server_readiness_timeout}s.",
+            "last_50_log_lines": last_lines,
+            "client_returncodes": {},
+            "server_returncode": server_proc.returncode,
+            "rounds_completed": 0,
+        }
 
-    # 3. Launch isolated Flower client processes
+    # 4. Launch isolated Flower client processes with log files
     client_procs = []
+    client_log_files = {}
+    client_log_paths = {}
+
     for cid in client_ids:
+        c_log_path = str(logs_dir / f"fl_client_{cid}.log")
+        c_log_file = open(c_log_path, "w", encoding="utf-8")
+        client_log_files[cid] = c_log_file
+        client_log_paths[cid] = c_log_path
+
         client_cmd = [
             sys.executable,
             "-m",
@@ -392,42 +571,89 @@ def run_genuine_flower_grpc(
             "--server-address",
             server_address,
             "--data-dir",
-            data_dir,
+            resolved_data_dir,
             "--epochs",
             str(local_epochs),
         ]
-        cp = subprocess.Popen(client_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        client_procs.append((cid, cp))
-
-    # 4. Wait for all clients to finish
-    client_statuses = {}
-    for cid, cp in client_procs:
         try:
-            c_out, c_err = cp.communicate(timeout=timeout)
+            cp = subprocess.Popen(
+                client_cmd,
+                stdout=c_log_file,
+                stderr=subprocess.STDOUT,
+                cwd=str(resolved_root),
+            )
+            client_procs.append((cid, cp))
+        except Exception as e:
+            c_log_file.write(f"Failed to spawn client {cid}: {str(e)}\n")
+            c_log_file.close()
+
+    # 5. Wait for all clients to finish
+    client_statuses = {}
+    client_failed_step = None
+    problem_log_lines = []
+
+    client_start_time = time.time()
+    for cid, cp in client_procs:
+        remaining = max(1.0, client_timeout - (time.time() - client_start_time))
+        try:
+            cp.wait(timeout=remaining)
             client_statuses[cid] = cp.returncode
         except subprocess.TimeoutExpired:
             cp.kill()
-            cp.communicate()
+            cp.wait()
             client_statuses[cid] = -1
+            client_failed_step = "timeout"
 
-    # 5. Wait for server to finish
+        # Close client log file
+        client_log_files[cid].close()
+
+        if client_statuses[cid] != 0 and not client_failed_step:
+            c_lines = get_last_log_lines(client_log_paths[cid], 50)
+            combined = " ".join(c_lines).lower()
+            if "connection refused" in combined or "failed to connect" in combined:
+                client_failed_step = "client_connect"
+            elif "memory" in combined or "oom" in combined:
+                client_failed_step = "out_of_memory"
+            else:
+                client_failed_step = "round_failed"
+            problem_log_lines = c_lines
+
+    # 6. Wait for server process to finish
+    server_timeout_remaining = max(5.0, client_timeout - (time.time() - client_start_time))
     try:
-        s_out, s_err = server_proc.communicate(timeout=timeout)
+        server_proc.wait(timeout=server_timeout_remaining)
         server_code = server_proc.returncode
     except subprocess.TimeoutExpired:
         server_proc.kill()
-        s_out, s_err = server_proc.communicate()
+        server_proc.wait()
         server_code = -1
+        if not client_failed_step:
+            client_failed_step = "timeout"
+
+    server_log_file.close()
+    server_last_lines = get_last_log_lines(server_log_path, 50)
 
     success = (server_code == 0) and all(code == 0 for code in client_statuses.values())
+
+    if not success and not client_failed_step:
+        combined = " ".join(server_last_lines).lower()
+        if "memory" in combined or "oom" in combined:
+            client_failed_step = "out_of_memory"
+        else:
+            client_failed_step = "round_failed"
+
+    reported_log_lines = problem_log_lines if problem_log_lines else server_last_lines
+
     return {
         "status": "completed" if success else "failed",
+        "failed_step": None if success else client_failed_step,
         "mode": "flower_grpc_multiprocess",
         "server_address": server_address,
         "rounds_completed": num_rounds if success else 0,
         "server_returncode": server_code,
         "client_returncodes": client_statuses,
-        "server_stderr_snippet": s_err[-500:] if s_err else "",
+        "last_50_log_lines": reported_log_lines,
+        "server_stderr_snippet": "\n".join(server_last_lines[-10:]) if server_last_lines else "",
     }
 
 

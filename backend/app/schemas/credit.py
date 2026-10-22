@@ -152,3 +152,37 @@ class RoleSelectionResponse(BaseModel):
     role: str
     expires_at: str
 
+
+class FLClientUpdateRequest(BaseModel):
+    round_id: str
+    lender_id: str
+    weights: List[float]
+    bias: float
+    num_samples: int
+    steps: int
+    dp_enabled: bool = False
+    epsilon: Optional[float] = None
+    delta: Optional[float] = None
+
+
+class FLUpdateResponse(BaseModel):
+    status: str
+    message: str
+    round_id: str
+    client_id: str
+    samples_recorded: int
+    round_status: str
+    candidate_version: Optional[str] = None
+    metrics: Optional[Dict[str, Any]] = None
+    epsilon: Optional[float] = None
+
+
+class FLGlobalModelResponse(BaseModel):
+    round_id: str
+    version: str
+    feature_names: List[str]
+    weights: List[float]
+    bias: float
+    status: str
+
+

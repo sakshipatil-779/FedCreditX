@@ -42,7 +42,9 @@ htmlcov/
 .ruff_cache/
 
 # Data and Artifacts (Privacy Boundary)
+logs/
 backend/logs/
+backend/artifacts/models/federated_candidate*
 *.sqlite
 *.sqlite3
 *.db
