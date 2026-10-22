@@ -101,8 +101,22 @@ npm run build
 
 ---
 
-## 5. What FedCreditX Does NOT Claim
+## 5. Authentication & Role-Based Access Control (RBAC)
+
+FedCreditX implements a 5-checkpoint server-enforced authentication workflow:
+1. **Interactive Role Selection on Sign-In:** Every Google sign-in prompts the user to select between **Bank Underwriting Officer** (*review applicants and record decisions*) and **Auditor** (*read-only access to audit trail and model governance*).
+2. **Server-Side Token Verification & Allowlist Match:** The backend independently verifies Google ID tokens and checks the requested role against `AUDITOR_EMAILS` (and optional `OFFICER_EMAILS`).
+3. **HTTP 403 on Unapproved Auditor Requests:** If an unapproved account requests the Auditor role, the server returns HTTP 403 (*"Your account is not approved as Auditor. Contact the administrator."*).
+4. **Server-Side Role Storage:** Granted roles are persisted in the `server_sessions` table in SQLite, and all role checks on `/api/audit`, `/api/audit/export`, and `/api/metrics` are enforced on the server.
+5. **Audit Logging:** Every sign-in attempt (`AUTH_ROLE_GRANTED` or `AUTH_ROLE_DENIED`) is logged in the SQLite audit trail.
+
+For full architectural details and instructions on adding approved auditor accounts on Render via `AUDITOR_EMAILS`, refer to [docs/AUTH.md](docs/AUTH.md).
+
+---
+
+## 6. What FedCreditX Does NOT Claim
 
 - **Not a Calibrated Real-World Credit Score:** This prototype generates model-estimated probabilities on synthetic distributions; it does not approve real bank loans or replace credit bureaus.
 - **Human-in-the-Loop Primacy:** Prototype recommendations (Auto-approve, Send to review, Flag high risk) never autonomously disburse funds; authorized officers must confirm decisions.
 - **Demo Audit Trail:** The local SQLite audit trail provides demonstration traceability, not a tamper-proof cryptographic production ledger.
+
