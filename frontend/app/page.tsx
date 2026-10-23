@@ -410,7 +410,7 @@ export default function FedCreditXDashboard() {
 
     // Direct role selection with backend /api/auth/select-role
     try {
-      const token = `test_tok_${email}`;
+      const token = `test_tok:${email}`;
       const res = await fetch(`${API_BASE}/api/auth/select-role`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
