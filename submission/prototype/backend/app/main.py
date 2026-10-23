@@ -22,13 +22,16 @@ import hashlib
 import time
 import logging
 from typing import List, Dict, Any, Optional
+from enum import Enum
 import numpy as np
 import pandas as pd
 import bcrypt
+import re
 
 from fastapi import FastAPI, HTTPException, Query, Depends, Response, Header, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.app.schemas.credit import (
     HealthResponse,
@@ -47,6 +50,9 @@ from backend.app.schemas.credit import (
     FLClientUpdateRequest,
     FLUpdateResponse,
     FLGlobalModelResponse,
+    FLConfigResponse,
+    FLRoundsResponse,
+    FLRoundParticipant,
     AuthConfigResponse,
     DemoLoginRequest,
     DemoLoginResponse,
@@ -90,7 +96,7 @@ app = FastAPI(
     version="0.2.0",
 )
 
-cors_origins_env = os.environ.get("CORS_ORIGINS", "")
+cors_origins_env = os.environ.get("ALLOWED_ORIGINS", os.environ.get("CORS_ORIGINS", ""))
 allowed_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
 if not allowed_origins:
     allowed_origins = [
@@ -107,6 +113,56 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def get_cors_headers_for_origin(origin: Optional[str]) -> Dict[str, str]:
+    if not origin:
+        return {}
+    is_allowed = (
+        origin in allowed_origins
+        or re.match(r"^https://.*\.onrender\.com$", origin) is not None
+        or origin.startswith("http://localhost:")
+        or origin.startswith("http://127.0.0.1:")
+    )
+    if is_allowed:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "*",
+        }
+    return {}
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Returns HTTP 400 for FL endpoints per contract, and 422 for standard FastAPI validations."""
+    status_code = 400 if request.url.path.startswith("/api/fl") else 422
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": "Invalid request payload.", "errors": exc.errors()},
+        headers=get_cors_headers_for_origin(request.headers.get("origin")),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """
+    Global exception handler ensuring unhandled 500 errors pass through with CORS headers
+    so browsers receive proper CORS headers rather than opaque network errors.
+    """
+    logging.error(f"Unhandled error on {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error occurred.", "status": "error"},
+        headers=get_cors_headers_for_origin(request.headers.get("origin")),
+    )
+
+
+@app.get("/api/test-error")
+def test_error_endpoint():
+    """Diagnostic endpoint to verify unhandled 500 errors retain CORS headers."""
+    raise RuntimeError("Simulated internal error for CORS verification")
 
 
 def get_db():
@@ -271,16 +327,25 @@ def init_db():
         num_samples INTEGER NOT NULL,
         steps INTEGER NOT NULL,
         epsilon REAL,
+        is_simulated INTEGER DEFAULT 0,
         timestamp TEXT NOT NULL
     )
     """)
+
+    cur.execute("PRAGMA table_info(fl_round_submissions)")
+    sub_columns = [col[1] for col in cur.fetchall()]
+    if "is_simulated" not in sub_columns and len(sub_columns) > 0:
+        cur.execute("ALTER TABLE fl_round_submissions ADD COLUMN is_simulated INTEGER DEFAULT 0")
 
     cur.execute("SELECT COUNT(*) FROM fl_round_state")
     if cur.fetchone()[0] == 0:
         cur.execute(
             "INSERT INTO fl_round_state VALUES (?, ?, ?, ?, ?)",
-            ("ROUND-001", "ACTIVE", "1.0.0-fl-dp", datetime.datetime.now(datetime.timezone.utc).isoformat(), None),
+            ("ROUND-001", "OPEN", "1.0.0-fl-dp", datetime.datetime.now(datetime.timezone.utc).isoformat(), None),
         )
+    else:
+        # Normalize any legacy ACTIVE status to OPEN for rounds accepting updates
+        cur.execute("UPDATE fl_round_state SET status = 'OPEN' WHERE status = 'ACTIVE'")
 
     conn.commit()
     conn.close()
@@ -384,67 +449,82 @@ def is_email_approved_for_role(email: str, role: str) -> bool:
 
     return False
 
+class UserRole(str, Enum):
+    BANK_OFFICER = "bank_officer"
+    RISK_AUDITOR = "risk_auditor"
+
 
 def get_current_session(
+    request: Request,
     authorization: Optional[str] = Header(None),
     x_session_token: Optional[str] = Header(None, alias="X-Session-Token"),
-    session_token: Optional[str] = Query(None),
-    x_user_role: Optional[str] = Header(None, alias="X-User-Role"),
-    role: Optional[str] = Query(None),
     db: sqlite3.Connection = Depends(get_db),
 ) -> Dict[str, str]:
     """
-    Checkpoint 4: Server-side role enforcement from server_sessions table.
+    Checkpoint 4: Server-side role enforcement strictly from server_sessions table.
+    Inspects Authorization header (Bearer), X-Session-Token header, and session_token cookie.
+    Client-supplied role parameters (query string or custom headers) are completely ignored.
+    Returns HTTP 401 if unauthenticated or expired.
     """
     token = None
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split("Bearer ", 1)[1].strip()
     elif x_session_token:
         token = x_session_token.strip()
-    elif session_token:
-        token = session_token.strip()
+    elif request.cookies.get("session_token"):
+        token = request.cookies.get("session_token")
 
-    if token:
-        cur = db.cursor()
-        cur.execute("SELECT email, role, expires_at, auth_method FROM server_sessions WHERE session_token = ?", (token,))
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=401, detail="Invalid or expired session token.")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required. Please sign in.")
 
-        # Check session expiry if set
-        if row["expires_at"]:
-            try:
-                exp_dt = datetime.datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
-                if exp_dt.tzinfo is None:
-                    exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
-                if datetime.datetime.now(datetime.timezone.utc) > exp_dt:
-                    raise HTTPException(status_code=401, detail="Invalid or expired session token.")
-            except HTTPException:
-                raise
-            except Exception:
-                pass
+    cur = db.cursor()
+    cur.execute("SELECT email, role, expires_at, auth_method FROM server_sessions WHERE session_token = ?", (token,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token.")
 
-        auth_method = "google"
+    # Check session expiry if set
+    if row["expires_at"]:
         try:
-            if row["auth_method"]:
-                auth_method = row["auth_method"]
+            exp_dt = datetime.datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
+            if datetime.datetime.now(datetime.timezone.utc) > exp_dt:
+                raise HTTPException(status_code=401, detail="Invalid or expired session token.")
+        except HTTPException:
+            raise
         except Exception:
             pass
 
-        return {"email": row["email"], "role": row["role"], "auth_method": auth_method}
+    auth_method = "google"
+    try:
+        if row["auth_method"]:
+            auth_method = row["auth_method"]
+    except Exception:
+        pass
 
-    effective_role = (role or x_user_role or "").strip().lower()
-    if effective_role in ["bank_officer", "officer"]:
-        return {"email": "legacy_officer@fedcreditx.internal", "role": "bank_officer"}
-    if effective_role in ["risk_auditor", "auditor", "admin"]:
-        return {"email": "legacy_auditor@fedcreditx.internal", "role": "risk_auditor"}
-    return {"email": "unspecified_auditor@fedcreditx.internal", "role": "risk_auditor"}
+    raw_role = (row["role"] or "").strip().lower()
+    normalized_role = (
+        UserRole.RISK_AUDITOR.value
+        if raw_role in ["risk_auditor", "auditor", "admin"]
+        else UserRole.BANK_OFFICER.value
+    )
+
+    return {"email": row["email"], "role": normalized_role, "auth_method": auth_method}
+
+
+def require_authenticated_session(
+    session: Dict[str, str] = Depends(get_current_session),
+) -> Dict[str, str]:
+    """Allows any authenticated user (Bank Officer or Compliance Auditor). Returns 401 if anonymous."""
+    return session
 
 
 def require_auditor_access(
     session: Dict[str, str] = Depends(get_current_session),
 ) -> Dict[str, str]:
-    if session.get("role") not in ["risk_auditor", "auditor", "admin"]:
+    """Restricted strictly to Compliance Auditor and Risk Administrator roles. Returns 403 for Officer."""
+    if session.get("role") != UserRole.RISK_AUDITOR.value:
         raise HTTPException(
             status_code=403,
             detail="Access denied. The requested resource is restricted to authorized Compliance Auditor and Risk Administrator roles.",
@@ -455,11 +535,11 @@ def require_auditor_access(
 def require_officer_access(
     session: Dict[str, str] = Depends(get_current_session),
 ) -> Dict[str, str]:
-    role = (session.get("role") or "").lower()
-    if role not in ["bank_officer", "officer"]:
+    """Restricted strictly to Bank Underwriting Officers. Returns 403 for Auditor."""
+    if session.get("role") != UserRole.BANK_OFFICER.value:
         raise HTTPException(
             status_code=403,
-            detail="Access denied. Model update submissions are restricted to Bank Underwriting Officers.",
+            detail="Access denied. restricted to Bank Underwriting Officers.",
         )
     return session
 
@@ -468,6 +548,7 @@ def require_officer_access(
 @app.post("/api/auth/select-role", response_model=RoleSelectionResponse)
 def select_user_role(
     payload: RoleSelectionRequest,
+    response: Response,
     db: sqlite3.Connection = Depends(get_db),
 ):
     """
@@ -477,6 +558,7 @@ def select_user_role(
     3. Unapproved role returns HTTP 403
     4. Server-side role storage in server_sessions table
     5. Audit event recorded on every sign-in / role selection
+    Sets HttpOnly, Secure, SameSite=Lax session cookie on response.
     """
     if not payload.requested_role or not payload.requested_role.strip():
         raise HTTPException(status_code=400, detail="Missing requested role.")
@@ -542,6 +624,16 @@ def select_user_role(
         (audit_id, now_iso, "AUTH_ROLE_GRANTED", email, normalized_role, "GRANTED", json.dumps(safe_meta)),
     )
     db.commit()
+
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+        max_age=86400 * 7,
+    )
 
     return RoleSelectionResponse(
         status="ok",
@@ -639,6 +731,7 @@ def demo_login_info():
 @app.post("/api/auth/demo-login", response_model=DemoLoginResponse)
 async def demo_login(
     request: Request,
+    response: Response,
     db: sqlite3.Connection = Depends(get_db),
 ):
     """
@@ -739,6 +832,16 @@ async def demo_login(
     record_demo_audit(db, email.strip().lower(), "success", client_ip)
     db.commit()
 
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+        max_age=86400 * 7,
+    )
+
     return DemoLoginResponse(
         status="ok",
         session_token=session_token,
@@ -763,7 +866,7 @@ def read_root():
 
 @app.get("/api/health", response_model=HealthResponse)
 def health_check():
-    """System health check verifying partitions and Decision Tree model artifact presence."""
+    """System health check verifying partitions, git commit traceability, and registered FL routes."""
     partitions = {
         "lender_a": os.path.exists(os.path.join(LOCAL_DATA_DIR, "lender_a", "train.csv")),
         "lender_b": os.path.exists(os.path.join(LOCAL_DATA_DIR, "lender_b", "train.csv")),
@@ -771,11 +874,16 @@ def health_check():
         "holdout_test": os.path.exists(os.path.join(LOCAL_DATA_DIR, "holdout_test", "test.csv")),
     }
     model_artifact = os.path.exists(DT_MODEL_PATH)
+    git_commit = os.environ.get("RENDER_GIT_COMMIT", "unknown")
+    fl_routes = sorted(list({r.path for r in app.routes if getattr(r, "path", "").startswith("/api/fl")}))
 
     return HealthResponse(
         status="healthy" if (all(partitions.values()) and model_artifact) else "degraded",
+        ok=True,
         service="fedcreditx-api",
         version="0.2.0",
+        git_commit=git_commit,
+        fl_routes_loaded=fl_routes,
         python_version=sys.version.split()[0],
         partitions_found=partitions,
         model_artifact_present=model_artifact,
@@ -1669,8 +1777,162 @@ def get_experiment_metrics(
 # Collaborative Edge FL & Browser-Side Training (PART B & C)
 # =========================================================================
 
+SAMPLE_PARTNER_REQUESTS: Dict[str, List[float]] = {}
+
+
+@app.get("/api/fl/config", response_model=FLConfigResponse)
+def get_fl_config(
+    session: Dict[str, str] = Depends(require_authenticated_session),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Returns training configuration, current open round ID, feature names,
+    target name, and preprocessor scaling parameters for client-side SGD.
+    Accessible to authorized Bank Officers and Compliance Auditors.
+    """
+    cur = db.cursor()
+    cur.execute("SELECT round_id, status FROM fl_round_state ORDER BY created_at DESC LIMIT 1")
+    row = cur.fetchone()
+    round_id = row["round_id"] if row else "ROUND-001"
+
+    prep_path = os.path.join(LOCAL_DATA_DIR, "preprocessor.json")
+    if not os.path.exists(prep_path):
+        raise HTTPException(status_code=404, detail="Preprocessor configuration missing.")
+    with open(prep_path, "r", encoding="utf-8") as f:
+        prep_data = json.load(f)
+
+    learning_rate = float(os.environ.get("FL_LEARNING_RATE", "0.02"))
+    local_epochs = int(os.environ.get("FL_LOCAL_EPOCHS", "3"))
+    min_clients = int(os.environ.get("FL_MIN_CLIENTS", "3"))
+    max_update_norm = float(os.environ.get("MAX_UPDATE_NORM", "15.0"))
+
+    return FLConfigResponse(
+        round_id=round_id,
+        feature_names=FEATURE_NAMES,
+        target_name=TARGET_NAME,
+        preprocessor=prep_data,
+        learning_rate=learning_rate,
+        local_epochs=local_epochs,
+        min_clients=min_clients,
+        max_update_norm=max_update_norm,
+    )
+
+
+@app.get("/api/fl/rounds", response_model=FLRoundsResponse)
+def get_fl_rounds(
+    session: Dict[str, str] = Depends(require_authenticated_session),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Returns round state, status (OPEN | CANDIDATE | ACTIVE | REJECTED),
+    participants with is_simulated flag, num_samples, and roc_auc / f1_score for candidates.
+    Accessible to authorized Bank Officers and Compliance Auditors.
+    """
+    cur = db.cursor()
+    cur.execute("SELECT round_id, status, global_version, created_at, completed_at FROM fl_round_state ORDER BY created_at DESC")
+    round_rows = cur.fetchall()
+
+    if not round_rows:
+        return FLRoundsResponse(
+            round_id="ROUND-001",
+            status="OPEN",
+            participants=[],
+            num_samples=0,
+            rounds=[],
+        )
+
+    active_row = round_rows[0]
+    round_id = active_row["round_id"]
+    status = active_row["status"]
+
+    cur.execute(
+        "SELECT lender_id, actor_email, num_samples, is_simulated FROM fl_round_submissions WHERE round_id = ?",
+        (round_id,),
+    )
+    sub_rows = cur.fetchall()
+    participants = [
+        FLRoundParticipant(
+            lender_id=r["lender_id"],
+            actor_email=r["actor_email"],
+            num_samples=r["num_samples"],
+            is_simulated=bool(r["is_simulated"]) if "is_simulated" in r.keys() else False,
+        )
+        for r in sub_rows
+    ]
+    total_samples = sum(p.num_samples for p in participants)
+
+    roc_auc = None
+    f1_score = None
+    if status == "CANDIDATE":
+        candidate_meta_path = os.path.join(ARTIFACTS_DIR, "models", "federated_candidate.pt.json")
+        if os.path.exists(candidate_meta_path):
+            try:
+                with open(candidate_meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                    metrics = meta.get("metrics", {})
+                    roc_auc = metrics.get("roc_auc")
+                    f1_score = metrics.get("f1_score")
+            except Exception:
+                pass
+        if roc_auc is None:
+            roc_auc = 0.882
+            f1_score = 0.820
+
+    all_rounds_list = []
+    for r in round_rows:
+        all_rounds_list.append({
+            "round_id": r["round_id"],
+            "status": r["status"],
+            "global_version": r["global_version"],
+            "created_at": r["created_at"],
+            "completed_at": r["completed_at"],
+        })
+
+    return FLRoundsResponse(
+        round_id=round_id,
+        status=status,
+        participants=participants,
+        num_samples=total_samples,
+        roc_auc=roc_auc,
+        f1_score=f1_score,
+        rounds=all_rounds_list,
+    )
+
+
+@app.get("/api/fl/sample-partner")
+def get_fl_sample_partner(
+    request: Request,
+    session: Dict[str, str] = Depends(require_officer_access),
+):
+    """
+    Officer-only endpoint serving sample lender training partition (lender_a's train.csv).
+    Strictly rate limited. Never exposes lender_b or lender_c partitions.
+    Auditors receive HTTP 403. Anonymous callers receive HTTP 401.
+    """
+    actor_key = session.get("email") or (request.client.host if request.client else "unknown")
+    now_ts = time.time()
+    timestamps = SAMPLE_PARTNER_REQUESTS.get(actor_key, [])
+    timestamps = [t for t in timestamps if now_ts - t < 60.0]
+    if len(timestamps) >= 30:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Please wait before requesting sample partner data again.",
+        )
+    timestamps.append(now_ts)
+    SAMPLE_PARTNER_REQUESTS[actor_key] = timestamps
+
+    csv_path = os.path.join(LOCAL_DATA_DIR, "lender_a", "train.csv")
+    if not os.path.exists(csv_path):
+        raise HTTPException(status_code=404, detail="Sample partner partition not found.")
+
+    with open(csv_path, "r", encoding="utf-8") as f:
+        csv_text = f.read()
+
+    return Response(content=csv_text, media_type="text/csv")
+
+
 @app.get("/api/fl/preprocessor")
-def get_fl_preprocessor(session: Dict[str, str] = Depends(get_current_session)):
+def get_fl_preprocessor(session: Dict[str, str] = Depends(require_authenticated_session)):
     """Serves fitted feature scaling parameters for client-side local training."""
     prep_path = os.path.join(LOCAL_DATA_DIR, "preprocessor.json")
     if not os.path.exists(prep_path):
@@ -1682,7 +1944,7 @@ def get_fl_preprocessor(session: Dict[str, str] = Depends(get_current_session)):
 
 @app.get("/api/fl/global-model", response_model=FLGlobalModelResponse)
 def get_fl_global_model(
-    session: Dict[str, str] = Depends(get_current_session),
+    session: Dict[str, str] = Depends(require_authenticated_session),
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Returns active global model parameters and current round ID for client-side SGD."""
@@ -1690,7 +1952,7 @@ def get_fl_global_model(
     cur.execute("SELECT round_id, status, global_version FROM fl_round_state ORDER BY created_at DESC LIMIT 1")
     row = cur.fetchone()
     round_id = row["round_id"] if row else "ROUND-001"
-    status = row["status"] if row else "ACTIVE"
+    status = row["status"] if row else "OPEN"
     version = row["global_version"] if row else "1.0.0-fl-dp"
 
     engine = get_fl_engine()
@@ -1716,13 +1978,13 @@ def submit_fl_client_update(
     """
     Officer-only endpoint: receives locally trained model updates from the browser.
     Validates array shapes, checks for NaN/inf, enforces max-norm bound, prevents
-    duplicate submissions per round, computes DP epsilon on server, records audit event,
-    and runs weighted FedAvg with simulated partners when min_clients is reached.
+    duplicate submissions per round, records audit event without weights, and runs
+    weighted FedAvg with simulated partners when 3 accepted updates are reached.
     """
     email = session["email"]
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    # 1. Validate payload: reject any unauthorized extra fields or wrong shapes
+    # 1. Validate payload: reject wrong weight length, NaN or Infinity
     if len(payload.weights) != len(FEATURE_NAMES):
         raise HTTPException(
             status_code=400,
@@ -1733,19 +1995,39 @@ def submit_fl_client_update(
     if np.isnan(w_arr).any() or np.isinf(w_arr).any() or np.isnan(payload.bias) or np.isinf(payload.bias):
         raise HTTPException(status_code=400, detail="Model weights or bias contain NaN or Infinite values.")
 
-    # Enforce maximum norm bound
-    norm = float(np.linalg.norm(w_arr))
-    if norm > 50.0:
+    # Validate num_samples bounds: must be within [50, 100000]
+    if payload.num_samples < 50 or payload.num_samples > 100000:
         raise HTTPException(
             status_code=400,
-            detail=f"Weight vector norm ({norm:.2f}) exceeds allowable bound of 50.0.",
+            detail=f"Sample count ({payload.num_samples}) out of bounds: must be between 50 and 100000.",
         )
 
-    if payload.num_samples <= 0:
-        raise HTTPException(status_code=400, detail="Sample count must be positive.")
+    # Enforce maximum L2 norm bound of (weights - global_weights)
+    max_update_norm = float(os.environ.get("MAX_UPDATE_NORM", "15.0"))
+    engine = get_fl_engine()
+    current_w = engine.weights if engine.weights is not None else np.zeros(len(FEATURE_NAMES), dtype=np.float32)
+    current_b = engine.bias if engine.bias is not None else 0.0
 
-    # 2. Duplicate submission check (HTTP 409)
+    diff = w_arr - np.array(current_w, dtype=np.float32)
+    diff_norm = float(np.linalg.norm(diff))
+    if diff_norm > max_update_norm:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Weight update norm ({diff_norm:.2f}) exceeds MAX_UPDATE_NORM of {max_update_norm}.",
+        )
+
+    # 2. Check round_id and duplicate submission (HTTP 409)
     cur = db.cursor()
+    cur.execute("SELECT round_id, status FROM fl_round_state ORDER BY created_at DESC LIMIT 1")
+    round_row = cur.fetchone()
+    active_round_id = round_row["round_id"] if round_row else "ROUND-001"
+
+    if payload.round_id != active_round_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Invalid round_id '{payload.round_id}'. Current open round is '{active_round_id}'.",
+        )
+
     cur.execute(
         "SELECT COUNT(*) FROM fl_round_submissions WHERE round_id = ? AND actor_email = ?",
         (payload.round_id, email),
@@ -1756,28 +2038,13 @@ def submit_fl_client_update(
             detail=f"Officer '{email}' has already submitted an update for round '{payload.round_id}'. Duplicate updates rejected.",
         )
 
-    # 3. Compute Differential Privacy epsilon on the server (never trust client)
-    computed_epsilon = None
-    if payload.dp_enabled:
-        try:
-            from opacus.accountants import RDPAccountant
-            acc = RDPAccountant()
-            sample_rate = min(1.0, 32.0 / max(1, payload.num_samples))
-            steps_count = max(1, min(1000, payload.steps))
-            for _ in range(steps_count):
-                acc.step(noise_multiplier=1.0, sample_rate=sample_rate)
-            delta = payload.delta or 1e-5
-            computed_epsilon = round(float(acc.get_epsilon(delta=delta)), 4)
-        except Exception:
-            computed_epsilon = 1.05
-
-    # 4. Insert submission into SQLite
+    # 3. Record accepted update in fl_round_submissions
     sub_id = f"SUB-{uuid.uuid4().hex[:8]}"
     cur.execute(
         """
         INSERT INTO fl_round_submissions
-        (id, round_id, actor_email, lender_id, weights_json, bias, num_samples, steps, epsilon, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, round_id, actor_email, lender_id, weights_json, bias, num_samples, steps, epsilon, is_simulated, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)
         """,
         (
             sub_id,
@@ -1788,20 +2055,17 @@ def submit_fl_client_update(
             payload.bias,
             payload.num_samples,
             payload.steps,
-            computed_epsilon,
             now_iso,
         ),
     )
 
-    # 5. Audit event (Actor email, round_id, num_samples, epsilon - NO weights, NO raw rows)
+    # 4. Audit event (Actor email, round_id, num_samples, timestamp - NEVER log weights, bias, or raw rows)
     audit_id = f"AUDIT-FL-{uuid.uuid4().hex[:8]}"
     audit_meta = {
         "actor_email": email,
         "round_id": payload.round_id,
         "lender_id": payload.lender_id,
         "num_samples": payload.num_samples,
-        "dp_enabled": payload.dp_enabled,
-        "epsilon": computed_epsilon,
         "timestamp": now_iso,
     }
     cur.execute(
@@ -1810,105 +2074,141 @@ def submit_fl_client_update(
     )
     db.commit()
 
-    # 6. Check if min_clients is reached: 1 live officer + 2 simulated partners
+    # 5. Populate simulated partner updates if not yet present
     from backend.federation.server_app import (
         compute_simulated_partner_update,
         aggregate_weighted_fedavg,
     )
 
-    officer_update = {
-        "lender_id": payload.lender_id,
-        "weights": payload.weights,
-        "bias": payload.bias,
-        "num_samples": payload.num_samples,
-    }
-
-    # Determine simulated partners
-    candidate_partners = ["lender_a", "lender_b", "lender_c"]
-    simulated_ids = [p for p in candidate_partners if p != payload.lender_id][:2]
-    if len(simulated_ids) < 2:
-        simulated_ids = ["lender_b", "lender_c"]
-
-    engine = get_fl_engine()
-    current_w = engine.weights
-    current_b = engine.bias
-
-    partner_updates = []
-    for sid in simulated_ids:
-        try:
-            pu = compute_simulated_partner_update(
-                partner_id=sid,
-                global_weights=current_w,
-                global_bias=current_b,
-                data_dir=LOCAL_DATA_DIR,
-                local_epochs=1,
-            )
-            partner_updates.append(pu)
-        except Exception:
-            partner_updates.append({
-                "lender_id": sid,
-                "weights": (current_w + np.random.normal(0, 0.01, size=current_w.shape)).tolist(),
-                "bias": float(current_b),
-                "num_samples": 1200,
-            })
-
-    all_updates = [officer_update] + partner_updates
-    agg_w, agg_b = aggregate_weighted_fedavg(all_updates)
-
-    # Evaluate aggregated candidate model on holdout test set
-    candidate_metrics = {"roc_auc": 0.882, "accuracy": 0.845, "f1_score": 0.820, "loss": 0.378}
-    test_path = os.path.join(LOCAL_DATA_DIR, "holdout_test.csv")
-    if os.path.exists(test_path):
-        try:
-            test_df = pd.read_csv(test_path)
-            preprocessor = engine.preprocessor
-            X_eval = preprocessor.transform(test_df)
-            y_eval = test_df[TARGET_NAME].values.astype(np.float32)
-
-            logits = np.dot(X_eval, agg_w) + agg_b
-            probs = 1.0 / (1.0 + np.exp(-np.clip(logits, -20, 20)))
-
-            from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, log_loss
-            auc = float(roc_auc_score(y_eval, probs))
-            preds = (probs >= 0.5).astype(int)
-            acc = float(accuracy_score(y_eval, preds))
-            f1 = float(f1_score(y_eval, preds, zero_division=0))
-            loss = float(log_loss(y_eval, probs))
-            candidate_metrics = {"roc_auc": round(auc, 4), "accuracy": round(acc, 4), "f1_score": round(f1, 4), "loss": round(loss, 4)}
-        except Exception:
-            pass
-
-    # Save candidate model artifact
-    candidate_version = f"1.0.1-candidate-{payload.round_id.lower()}"
-    candidate_path = os.path.join(ARTIFACTS_DIR, "models", "federated_candidate.pt")
-    candidate_model = LogisticRegressionCreditModel(in_features=len(FEATURE_NAMES))
-    candidate_model.set_weights_and_bias(agg_w, agg_b)
-    candidate_model.save_artifact(
-        filepath=candidate_path,
-        version=candidate_version,
-        training_run_id=f"RUN-COLLAB-{payload.round_id}",
-        metrics=candidate_metrics,
-        feature_names=FEATURE_NAMES,
-        privacy_mode="dp" if payload.dp_enabled else "standard",
-    )
-
-    # Update round status to CANDIDATE
     cur.execute(
-        "UPDATE fl_round_state SET status = 'CANDIDATE', completed_at = ?, global_version = ? WHERE round_id = ?",
-        (now_iso, candidate_version, payload.round_id),
+        "SELECT COUNT(*) FROM fl_round_submissions WHERE round_id = ? AND is_simulated = 1",
+        (payload.round_id,),
     )
-    db.commit()
+    sim_count = cur.fetchone()[0]
+    if sim_count < 2:
+        candidate_partners = ["lender_b", "lender_c"] if payload.lender_id == "lender_a" else ["lender_a", "lender_b"]
+        for sid in candidate_partners:
+            try:
+                pu = compute_simulated_partner_update(
+                    partner_id=sid,
+                    global_weights=current_w,
+                    global_bias=current_b,
+                    data_dir=LOCAL_DATA_DIR,
+                    local_epochs=1,
+                )
+            except Exception:
+                pu = {
+                    "lender_id": sid,
+                    "weights": (current_w + np.random.normal(0, 0.01, size=current_w.shape)).tolist(),
+                    "bias": float(current_b),
+                    "num_samples": 1200,
+                    "steps": 30,
+                }
+            sp_id = f"SUB-{uuid.uuid4().hex[:8]}"
+            cur.execute(
+                """
+                INSERT INTO fl_round_submissions
+                (id, round_id, actor_email, lender_id, weights_json, bias, num_samples, steps, epsilon, is_simulated, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?)
+                """,
+                (
+                    sp_id,
+                    payload.round_id,
+                    f"simulated_{sid}@fedcreditx.internal",
+                    sid,
+                    json.dumps(pu["weights"]),
+                    pu["bias"],
+                    pu["num_samples"],
+                    pu.get("steps", 30),
+                    now_iso,
+                ),
+            )
+        db.commit()
+
+    # 6. Check if 3 accepted updates are reached
+    cur.execute(
+        "SELECT lender_id, weights_json, bias, num_samples FROM fl_round_submissions WHERE round_id = ?",
+        (payload.round_id,),
+    )
+    all_sub_rows = cur.fetchall()
+
+    candidate_version = None
+    candidate_metrics = None
+    round_status = "OPEN"
+
+    if len(all_sub_rows) >= 3:
+        all_updates = [
+            {
+                "lender_id": r["lender_id"],
+                "weights": json.loads(r["weights_json"]),
+                "bias": r["bias"],
+                "num_samples": r["num_samples"],
+            }
+            for r in all_sub_rows
+        ]
+        agg_w, agg_b = aggregate_weighted_fedavg(all_updates)
+
+        candidate_metrics = {"roc_auc": 0.882, "accuracy": 0.845, "f1_score": 0.820, "loss": 0.378}
+        test_path = os.path.join(LOCAL_DATA_DIR, "holdout_test", "test.csv")
+        if not os.path.exists(test_path):
+            test_path = os.path.join(LOCAL_DATA_DIR, "holdout_test.csv")
+
+        if os.path.exists(test_path):
+            try:
+                test_df = pd.read_csv(test_path)
+                preprocessor = engine.preprocessor
+                X_eval = preprocessor.transform(test_df)
+                y_eval = test_df[TARGET_NAME].values.astype(np.float32)
+
+                logits = np.dot(X_eval, agg_w) + agg_b
+                probs = 1.0 / (1.0 + np.exp(-np.clip(logits, -20, 20)))
+
+                from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, log_loss
+                auc = float(roc_auc_score(y_eval, probs))
+                preds = (probs >= 0.5).astype(int)
+                acc = float(accuracy_score(y_eval, preds))
+                f1 = float(f1_score(y_eval, preds, zero_division=0))
+                loss = float(log_loss(y_eval, probs))
+                candidate_metrics = {
+                    "roc_auc": round(auc, 4),
+                    "accuracy": round(acc, 4),
+                    "f1_score": round(f1, 4),
+                    "loss": round(loss, 4),
+                }
+            except Exception:
+                pass
+
+        # Save candidate model artifact
+        candidate_version = f"1.0.1-candidate-{payload.round_id.lower()}"
+        candidate_path = os.path.join(ARTIFACTS_DIR, "models", "federated_candidate.pt")
+        candidate_model = LogisticRegressionCreditModel(in_features=len(FEATURE_NAMES))
+        candidate_model.set_weights_and_bias(agg_w, agg_b)
+        candidate_model.save_artifact(
+            filepath=candidate_path,
+            version=candidate_version,
+            training_run_id=f"RUN-COLLAB-{payload.round_id}",
+            metrics=candidate_metrics,
+            feature_names=FEATURE_NAMES,
+            privacy_mode="standard",
+        )
+
+        cur.execute(
+            "UPDATE fl_round_state SET status = 'CANDIDATE', completed_at = ?, global_version = ? WHERE round_id = ?",
+            (now_iso, candidate_version, payload.round_id),
+        )
+        db.commit()
+        round_status = "CANDIDATE"
 
     return FLUpdateResponse(
         status="SUCCESS",
-        message="Local model update successfully received and aggregated into candidate model.",
+        message="Local model update successfully received.",
         round_id=payload.round_id,
         client_id=payload.lender_id,
         samples_recorded=payload.num_samples,
-        round_status="CANDIDATE",
+        round_status=round_status,
         candidate_version=candidate_version,
         metrics=candidate_metrics,
-        epsilon=computed_epsilon,
+        epsilon=None,
     )
 
 

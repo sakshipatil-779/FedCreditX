@@ -5,16 +5,19 @@ Supports Decision Tree risk scoring, human review, and model override logging.
 """
 
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class HealthResponse(BaseModel):
     status: str
-    service: str
-    version: str
-    python_version: str
-    partitions_found: Dict[str, bool]
-    model_artifact_present: bool
+    ok: bool = True
+    service: str = "fedcreditx-api"
+    version: str = "0.2.0"
+    git_commit: str = "unknown"
+    fl_routes_loaded: List[str] = Field(default_factory=list)
+    python_version: Optional[str] = None
+    partitions_found: Optional[Dict[str, bool]] = None
+    model_artifact_present: Optional[bool] = None
     active_scoring_engine: str = "DecisionTreeClassifier"
 
 
@@ -153,16 +156,43 @@ class RoleSelectionResponse(BaseModel):
     expires_at: str
 
 
+class FLConfigResponse(BaseModel):
+    round_id: str
+    feature_names: List[str]
+    target_name: str = "defaulted"
+    preprocessor: Dict[str, Any]
+    learning_rate: float = 0.02
+    local_epochs: int = 3
+    min_clients: int = 3
+    max_update_norm: float = 15.0
+
+
+class FLRoundParticipant(BaseModel):
+    lender_id: str
+    actor_email: str
+    num_samples: int
+    is_simulated: bool
+
+
+class FLRoundsResponse(BaseModel):
+    round_id: str
+    status: str
+    participants: List[FLRoundParticipant] = []
+    num_samples: int = 0
+    roc_auc: Optional[float] = None
+    f1_score: Optional[float] = None
+    rounds: Optional[List[Dict[str, Any]]] = None
+
+
 class FLClientUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     round_id: str
     lender_id: str
     weights: List[float]
     bias: float
     num_samples: int
     steps: int
-    dp_enabled: bool = False
-    epsilon: Optional[float] = None
-    delta: Optional[float] = None
 
 
 class FLUpdateResponse(BaseModel):
