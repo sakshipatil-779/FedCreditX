@@ -32,10 +32,18 @@ export interface DemoSessionPayload {
   expiresAt: string;
 }
 
+export interface DirectSignInPayload {
+  email: string;
+  password?: string;
+  displayName: string;
+  role: "bank_officer" | "risk_auditor";
+}
+
 interface LandingPageProps {
   onGoogleSignIn: (googleUser: GoogleUserPayload) => void;
   onAuthenticated?: (user: FirebaseUser) => void;
   onDemoAuditorSignIn?: (demoSession: DemoSessionPayload) => void;
+  onDirectSignIn?: (payload: DirectSignInPayload) => Promise<{ success: boolean; error?: string }>;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
@@ -67,12 +75,15 @@ export function LandingPage({
   onGoogleSignIn,
   onAuthenticated,
   onDemoAuditorSignIn,
+  onDirectSignIn,
 }: LandingPageProps) {
-  const [customEmail, setCustomEmail] = useState("");
-  const [customName, setCustomName] = useState("");
-  const [customRole, setCustomRole] = useState<"bank_officer" | "risk_auditor">("bank_officer");
-  const [showCustomGoogle, setShowCustomGoogle] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [role, setRole] = useState<"bank_officer" | "risk_auditor">("bank_officer");
   const [loading, setLoading] = useState(false);
+  const [formLoading, setFormLoading] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Demo Auditor Authentication State
@@ -175,31 +186,40 @@ export function LandingPage({
     }
   };
 
-  const handleGoogleAccountLogin = (acc: (typeof GOOGLE_INSTITUTIONAL_ACCOUNTS)[0]) => {
-    setAuthError(null);
-    onGoogleSignIn({
-      uid: `google_user_${Math.random().toString(36).substring(2, 8)}`,
-      email: acc.email,
-      displayName: acc.displayName,
-      idToken: `google_jwt_test_${acc.email}`,
-    });
-  };
-
-  const handleCustomGoogleSubmit = (e: React.FormEvent) => {
+  const handleDirectSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customEmail.trim()) {
-      setAuthError("Please provide your Google email address.");
+    setFormError(null);
+    setAuthError(null);
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      setFormError("Please provide your email address.");
       return;
     }
-    const email = customEmail.trim().toLowerCase();
-    const displayName = customName.trim() || email.split("@")[0];
-    setAuthError(null);
-    onGoogleSignIn({
-      uid: `google_custom_${Math.random().toString(36).substring(2, 8)}`,
-      email,
-      displayName,
-      idToken: `google_jwt_test_${email}`,
-    });
+    setFormLoading(true);
+    try {
+      if (onDirectSignIn) {
+        const res = await onDirectSignIn({
+          email: cleanEmail,
+          password: password,
+          displayName: fullName.trim() || cleanEmail.split("@")[0],
+          role: role,
+        });
+        if (!res.success) {
+          setFormError(res.error || "Authentication failed. Please verify credentials.");
+        }
+      } else {
+        onGoogleSignIn({
+          uid: `direct_${role}_${Math.random().toString(36).substring(2, 8)}`,
+          email: cleanEmail,
+          displayName: fullName.trim() || cleanEmail.split("@")[0],
+          idToken: `test_token:${cleanEmail}`,
+        });
+      }
+    } catch (err: any) {
+      setFormError(err.message || "Sign in failed. Please try again.");
+    } finally {
+      setFormLoading(false);
+    }
   };
 
   return (
@@ -389,15 +409,15 @@ export function LandingPage({
                   <div>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">
-                        Firebase Authentication
+                        Institutional Access
                       </span>
                       <span className="w-2 h-2 rounded-full bg-[#238354]"></span>
                     </div>
                     <h2 className="text-xl font-extrabold text-[#111713] mt-1">
-                      Sign In with Google
+                      Sign In to FedCreditX
                     </h2>
                     <p className="text-xs text-[#758079] mt-0.5">
-                      Connect your Google account to access your assigned institutional role.
+                      Connect via Google Workspace or sign in with your email and role.
                     </p>
                   </div>
 
@@ -406,7 +426,7 @@ export function LandingPage({
                     <button
                       type="button"
                       onClick={handleRealGooglePopup}
-                      disabled={loading}
+                      disabled={loading || formLoading}
                       className="w-full py-3.5 px-4 bg-white hover:bg-[#F2F5F3] border-2 border-[#123F36] text-[#111713] rounded-xl transition flex items-center justify-center gap-3 font-bold text-xs sm:text-sm shadow-sm hover:shadow-md cursor-pointer group"
                     >
                       <GoogleLogo className="w-5 h-5 shrink-0" />
@@ -434,106 +454,87 @@ export function LandingPage({
                   <div className="relative flex py-1 items-center">
                     <div className="flex-grow border-t border-[#E8ECE9]"></div>
                     <span className="flex-shrink mx-3 text-[10px] font-bold text-[#758079] uppercase tracking-wider">
-                      Or 1-Click Institutional Demo Profiles
+                      Or Sign In with Email &amp; Password
                     </span>
                     <div className="flex-grow border-t border-[#E8ECE9]"></div>
                   </div>
 
-                  {/* Verified Institutional Google Accounts */}
-                  <div className="space-y-2.5">
-                    {GOOGLE_INSTITUTIONAL_ACCOUNTS.map((acc) => (
-                      <button
-                        key={acc.email}
-                        onClick={() => handleGoogleAccountLogin(acc)}
-                        disabled={loading}
-                        className="w-full p-3 bg-white hover:bg-[#F7F9F8] border border-[#E8ECE9] hover:border-[#123F36] rounded-2xl transition flex items-center justify-between group cursor-pointer text-left shadow-xs"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-[#E7F3EB] text-[#123F36] font-bold text-xs flex items-center justify-center border border-[#C5E4D1] shrink-0">
-                            {acc.avatar}
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-[#111713] flex items-center gap-2">
-                              {acc.displayName}
-                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                                acc.role === "bank_officer"
-                                  ? "bg-[#E7F3EB] text-[#123F36]"
-                                  : "bg-[#FEF3C7] text-[#92400E]"
-                              }`}>
-                                {acc.role === "bank_officer" ? "Bank Officer" : "Supervisory Auditor"}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-[#758079] truncate">{acc.email}</div>
-                          </div>
-                        </div>
-                        <div className="w-7 h-7 rounded-full bg-white border border-[#E8ECE9] flex items-center justify-center group-hover:bg-[#123F36] group-hover:text-white transition shrink-0">
-                          <GoogleLogo className="w-3.5 h-3.5" />
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Custom Google Workspace Account Toggle */}
-                  <div className="pt-2 border-t border-[#E8ECE9] space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-[#758079]">Need to sign in with another email?</span>
-                      <button
-                        type="button"
-                        onClick={() => setShowCustomGoogle(!showCustomGoogle)}
-                        className="text-xs font-bold text-[#123F36] hover:underline cursor-pointer"
-                      >
-                        {showCustomGoogle ? "Hide form" : "Enter email directly"}
-                      </button>
+                  {/* 2. Direct Email, Password & Role Form */}
+                  <form onSubmit={handleDirectSignInSubmit} className="space-y-3.5" autoComplete="off">
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-[#111713]">
+                        Email
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="officer@fedcreditx.com"
+                        className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
+                      />
                     </div>
 
-                    {showCustomGoogle && (
-                      <form onSubmit={handleCustomGoogleSubmit} className="space-y-3 pt-2">
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-semibold text-[#111713]">Google Account Email</label>
-                          <input
-                            type="email"
-                            required
-                            value={customEmail}
-                            onChange={(e) => setCustomEmail(e.target.value)}
-                            placeholder="officer.patel@gmail.com"
-                            className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
-                          />
-                        </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-[#111713]">
+                        Password
+                      </label>
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••••••"
+                        className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
+                      />
+                    </div>
 
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-semibold text-[#111713]">Full Name</label>
-                          <input
-                            type="text"
-                            value={customName}
-                            onChange={(e) => setCustomName(e.target.value)}
-                            placeholder="e.g. Neha Patel"
-                            className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
-                          />
-                        </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-[#111713]">
+                        Full Name <span className="text-[#758079] font-normal">(Optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        placeholder="e.g. Underwriting Officer"
+                        className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
+                      />
+                    </div>
 
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-semibold text-[#111713]">Assigned Role</label>
-                          <select
-                            value={customRole}
-                            onChange={(e) => setCustomRole(e.target.value as any)}
-                            className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
-                          >
-                            <option value="bank_officer">Bank Underwriting Officer</option>
-                            <option value="risk_auditor">Compliance Risk Auditor</option>
-                          </select>
-                        </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-[#111713]">
+                        Assigned Role
+                      </label>
+                      <select
+                        value={role}
+                        onChange={(e) => setRole(e.target.value as "bank_officer" | "risk_auditor")}
+                        className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
+                      >
+                        <option value="bank_officer">Bank Underwriting Officer</option>
+                        <option value="risk_auditor">Compliance Risk Auditor</option>
+                      </select>
+                    </div>
 
-                        <button
-                          type="submit"
-                          disabled={loading}
-                          className="w-full py-2.5 bg-[#123F36] hover:bg-[#1b5549] text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
-                        >
-                          <GoogleLogo className="w-4 h-4" />
-                          <span>Sign In with Custom Google</span>
-                        </button>
-                      </form>
+                    {formError && (
+                      <div className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FCA5A5] text-[#CF5555] text-xs font-semibold">
+                        {formError}
+                      </div>
                     )}
-                  </div>
+
+                    <div className="pt-1">
+                      <button
+                        type="submit"
+                        disabled={formLoading || loading}
+                        className="w-full py-3 bg-[#123F36] hover:bg-[#1b5549] text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm disabled:opacity-50"
+                      >
+                        {formLoading ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <span>Sign In</span>
+                        )}
+                      </button>
+                    </div>
+                  </form>
 
                   {authError && (
                     <div className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FCA5A5] text-[#CF5555] text-xs font-semibold">

@@ -360,6 +360,110 @@ export default function FedCreditXDashboard() {
     handleSignOut();
   };
 
+  const handleDirectSignIn = async (payload: {
+    email: string;
+    password?: string;
+    displayName: string;
+    role: "bank_officer" | "risk_auditor";
+  }): Promise<{ success: boolean; error?: string }> => {
+    const { email, password, displayName, role } = payload;
+
+    // Check demo login if risk_auditor and password entered
+    if (role === "risk_auditor" && password && password.trim()) {
+      try {
+        const demoRes = await fetch(`${API_BASE}/api/auth/demo-login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: email.trim(),
+            password: password.trim(),
+          }),
+        });
+
+        if (demoRes.ok) {
+          const data = await demoRes.json();
+          const demoUser: FirebaseUser = {
+            uid: `demo_${data.email}`,
+            email: data.email,
+            displayName: displayName || "Compliance Risk Auditor",
+            role: "risk_auditor",
+            authMethod: "demo",
+            createdAt: new Date().toISOString(),
+          };
+          if (typeof window !== "undefined") {
+            localStorage.setItem("fedcreditx_auth_user", JSON.stringify(demoUser));
+            localStorage.setItem("fedcreditx_session_token", data.session_token);
+          }
+          setCurrentUser(demoUser);
+          setPendingGoogleUser(null);
+          setRoleModalError(null);
+          setActiveScreen("audit");
+          return { success: true };
+        } else if (demoRes.status === 403) {
+          const errData = await demoRes.json().catch(() => ({}));
+          return { success: false, error: errData.detail || "Demo access has ended." };
+        }
+      } catch {
+        // Fall through to server-side role selection
+      }
+    }
+
+    // Direct role selection with backend /api/auth/select-role
+    try {
+      const token = `test_tok_${email}`;
+      const res = await fetch(`${API_BASE}/api/auth/select-role`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id_token: token,
+          requested_role: role,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const appUser: FirebaseUser = {
+          uid: `usr_${role}_${Math.random().toString(36).substring(2, 9)}`,
+          email: data.email,
+          displayName: displayName || email.split("@")[0] || "Authorized User",
+          role: data.role === "risk_auditor" ? "risk_auditor" : "bank_officer",
+          idToken: token,
+          createdAt: new Date().toISOString(),
+        };
+        if (typeof window !== "undefined") {
+          localStorage.setItem("fedcreditx_auth_user", JSON.stringify(appUser));
+          localStorage.setItem("fedcreditx_session_token", data.session_token);
+        }
+        setCurrentUser(appUser);
+        setPendingGoogleUser(null);
+        setRoleModalError(null);
+        if (appUser.role === "risk_auditor") {
+          setActiveScreen("audit");
+        } else {
+          setActiveScreen("decision");
+        }
+        return { success: true };
+      } else if (res.status === 403) {
+        const errData = await res.json().catch(() => ({}));
+        return {
+          success: false,
+          error: errData.detail || "Your account is not approved as Auditor. Contact the administrator.",
+        };
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        return {
+          success: false,
+          error: errData.detail || "Sign in failed. Please verify credentials.",
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        error: `Network error connecting to backend: ${err.message}`,
+      };
+    }
+  };
+
   const checkBackendHealth = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/overview`);
@@ -602,7 +706,7 @@ export default function FedCreditXDashboard() {
 
     const currentOfficer = currentUser?.displayName
       ? `${currentUser.displayName} (${currentUser.role === "bank_officer" ? "Bank Officer" : "Auditor"})`
-      : (currentUser?.email || "officer_neha");
+      : (currentUser?.email || "officer@fedcreditx.com");
 
     try {
       const res = await fetch(`${API_BASE}/api/cases/${selectedCaseId}/decision?lender_id=${selectedLender}`, {
@@ -642,7 +746,7 @@ export default function FedCreditXDashboard() {
 
     const currentOfficer = currentUser?.displayName
       ? `${currentUser.displayName} (${currentUser.role === "bank_officer" ? "Bank Officer" : "Auditor"})`
-      : (currentUser?.email || "officer_neha");
+      : (currentUser?.email || "officer@fedcreditx.com");
 
     try {
       const res = await fetch(`${API_BASE}/api/approvals`, {
@@ -1039,6 +1143,7 @@ export default function FedCreditXDashboard() {
             setRoleModalError(null);
             setActiveScreen("audit");
           }}
+          onDirectSignIn={handleDirectSignIn}
         />
         {pendingGoogleUser && (
           <RoleSelectModal
@@ -1860,7 +1965,7 @@ export default function FedCreditXDashboard() {
                             Human Underwriting Sign-Off
                           </span>
                           <span className="text-[11px] text-[#758079]">
-                            Officer: <strong className="text-[#111713]">{currentUser?.displayName || "Neha Patel"}</strong>
+                            Officer: <strong className="text-[#111713]">{currentUser?.displayName || "Underwriting Officer"}</strong>
                           </span>
                         </div>
                         <h3 className="text-base font-bold text-[#111713] mt-1">Underwriter Review & Actions</h3>
@@ -2218,7 +2323,7 @@ export default function FedCreditXDashboard() {
                       type="text"
                       value={filterActor}
                       onChange={(e) => setFilterActor(e.target.value)}
-                      placeholder="e.g. Neha Patel"
+                      placeholder="e.g. officer@fedcreditx.com"
                       className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#123F36]"
                     />
                   </div>

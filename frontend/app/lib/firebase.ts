@@ -32,25 +32,15 @@ export const firebaseConfig = {
 const SESSION_KEY = "fedcreditx_auth_user";
 const USERS_DB_KEY = "fedcreditx_registered_users";
 
-// Pre-seeded Google institutional accounts for 1-click evaluation
-export const GOOGLE_INSTITUTIONAL_ACCOUNTS = [
-  {
-    email: "neha.patel@bank-officer.google.com",
-    password: "Password@123",
-    displayName: "Neha Patel",
-    role: "bank_officer" as const,
-    institution: "Lender A (Commercial Bank Underwriting)",
-    avatar: "NP",
-  },
-  {
-    email: "vikram.malhotra@risk-auditor.google.com",
-    password: "Password@123",
-    displayName: "Vikram Malhotra",
-    role: "risk_auditor" as const,
-    institution: "Supervisory Credit Audit & Compliance",
-    avatar: "VM",
-  },
-];
+// Institutional accounts list (fake profile accounts removed)
+export const GOOGLE_INSTITUTIONAL_ACCOUNTS: Array<{
+  email: string;
+  password?: string;
+  displayName: string;
+  role: "bank_officer" | "risk_auditor";
+  institution: string;
+  avatar: string;
+}> = [];
 
 export const INSTITUTIONAL_ACCOUNTS = GOOGLE_INSTITUTIONAL_ACCOUNTS;
 

@@ -255,3 +255,13 @@
 6. **Historical Research Preservation:**
    - Flower federated learning coordinator and simulated client scripts preserved.
    - PyTorch logistic regression baseline and DP-SGD accounting records preserved as documented research benchmarks.
+
+---
+
+## 8. Phase H: Firebase Auth & Direct Email/Password Role Sign-In (2026-10-23)
+- **Firebase Configuration:** Configured `fedcreditx.firebaseapp.com` with official Firebase JS SDK credentials and Google popup authentication.
+- **Direct Email/Password & Role Selection:** Added primary sign-in form with Email, Password, Full Name (optional), and Assigned Role dropdown (`Bank Underwriting Officer` / `Compliance Risk Auditor`).
+- **Submit Button:** Button strictly labeled `"Sign In"`.
+- **Identity Integrity:** Completely purged fake demo names (`Neha Patel`, `Vikram Malhotra`) from placeholders, fallbacks, mock profiles, and default allowlists across all frontend and backend files.
+- **Verification:** 51/51 pytest tests passing, Next.js frontend compiled and built cleanly.
+

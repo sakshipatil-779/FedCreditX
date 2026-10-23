@@ -45,7 +45,7 @@ class TestFLOfficerUpdateAndRBAC(unittest.TestCase):
         res_auditor = self.client.post(
             "/api/auth/select-role",
             json={
-                "id_token": create_mock_jwt("vikram.malhotra@risk-auditor.google.com"),
+                "id_token": create_mock_jwt("auditor.lead@risk-auditor.google.com"),
                 "requested_role": "risk_auditor",
             },
         )

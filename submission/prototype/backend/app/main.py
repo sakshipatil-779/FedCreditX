@@ -296,7 +296,7 @@ def on_startup():
 # =========================================================================
 
 DEFAULT_AUDITOR_EMAILS = [
-    "vikram.malhotra@risk-auditor.google.com",
+    "auditor.lead@risk-auditor.google.com",
     "auditor@fedcreditx.com",
     "auditor@fedcreditx.org",
     "compliance@fedcreditx.com",
