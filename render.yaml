@@ -10,8 +10,14 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: ALLOWED_ORIGINS
+        value: http://localhost:3000,http://127.0.0.1:3000,https://fedcreditx.onrender.com
       - key: CORS_ORIGINS
-        value: http://localhost:3000,http://127.0.0.1:3000
+        value: http://localhost:3000,http://127.0.0.1:3000,https://fedcreditx.onrender.com
+      - key: MAX_UPDATE_NORM
+        value: "15.0"
+      - key: FL_MIN_CLIENTS
+        value: "3"
 
   # FedCreditX Next.js Frontend Service
   - type: web
@@ -27,5 +33,8 @@ services:
         value: "20"
       - key: NPM_CONFIG_PRODUCTION
         value: "false"
-      - key: NEXT_PUBLIC_API_URL
+      - key: BACKEND_URL
         value: https://fedcreditx-api.onrender.com
+      - key: NEXT_PUBLIC_API_URL
+        value: ""
+
