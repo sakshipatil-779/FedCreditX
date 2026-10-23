@@ -66,3 +66,66 @@ To authorize a new Google account for the Auditor role in production on Render:
    ```
 5. Click **Save Changes**. Render will automatically redeploy the service with the updated allowlist.
 6. The user can now sign in with Google, select **Auditor**, and access the audit trail and holdout benchmark.
+
+---
+
+## 5. Controlled Demo Auditor Login (Evaluator Access)
+
+For external evaluators who need direct access to compliance audit trails and holdout benchmark metrics without signing in through personal Google accounts, FedCreditX provides an isolated, rate-limited **Demo Auditor** authentication mechanism.
+
+### Key Security Guardrails
+1. **Disabled by Default:** The demo login endpoint (`POST /api/auth/demo-login`) returns HTTP 404 and the UI entry point remains hidden unless `DEMO_AUDITOR_ENABLED=true`.
+2. **Zero Plaintext Credentials:** Plain passwords and hashes are never stored in source code, commit history, logs, or test fixtures. Credentials are read entirely from environment variables at runtime.
+3. **Bcrypt Constant-Time Verification:** Passwords are verified against a salted bcrypt hash using constant-time comparison (`bcrypt.checkpw`).
+4. **Strict Role Isolation:** Demo sessions are assigned strictly to the `auditor` role. Officer-only endpoints (such as `POST /api/fl/update`) return HTTP 403 Forbidden.
+5. **Time-Bound Access Window:** Logins are rejected with HTTP 403 (`"Demo access has ended."`) if the current UTC time exceeds `DEMO_AUDITOR_EXPIRES_AT`.
+6. **Brute-Force Rate Limiting:** Restricted to 5 login attempts per IP per 15-minute rolling window; the 6th attempt receives HTTP 429.
+7. **Comprehensive Audit Logging:** Every attempt records an audit event (`timestamp`, `email`, `result`, `ip_address`) in the SQLite audit trail. Passwords and hashes are strictly excluded from logs.
+
+---
+
+### Step-by-Step Evaluator Setup on Render
+
+#### Step 1: Generate the Bcrypt Password Hash Locally
+Run the zero-disk-write generator script in your terminal:
+```bash
+python scripts/hash_demo_password.py
+```
+When prompted:
+```text
+Enter demo auditor password: <your-chosen-evaluator-password>
+Confirm demo auditor password: <your-chosen-evaluator-password>
+```
+The script will output **only** the bcrypt hash to stdout:
+```text
+$2b$12$e8YkYk4Ue1n...
+```
+*(Copy this hash for the Render dashboard).*
+
+#### Step 2: Configure Environment Variables on Render
+1. Open the [Render Dashboard](https://dashboard.render.com).
+2. Select the **`fedcreditx-api`** Web Service.
+3. Navigate to **Environment** in the left sidebar.
+4. Add the following environment variables:
+   | Key | Example Value | Description |
+   |---|---|---|
+   | `DEMO_AUDITOR_ENABLED` | `true` | Enables the demo login endpoint and UI toggle |
+   | `DEMO_AUDITOR_EMAIL` | `evaluator@fedcreditx.demo` | Case-insensitive demo auditor email |
+   | `DEMO_AUDITOR_PASSWORD_HASH` | `$2b$12$...` | Bcrypt hash generated in Step 1 |
+   | `DEMO_AUDITOR_EXPIRES_AT` | `2026-11-01T00:00:00Z` | UTC ISO expiration timestamp |
+5. Click **Save Changes**. Render will automatically trigger a rolling deployment.
+
+#### Step 3: Accessing Auditor Pages as Evaluator
+1. Open the FedCreditX application URL: `https://fedcreditx.onrender.com/`.
+2. Below the "Sign In with Google" button, click **"Demo auditor login"**.
+3. Enter the configured email and password.
+4. You will be routed directly to the **Audit Trail & Holdout Benchmark** landing views.
+5. A persistent amber banner will confirm: `"Demo auditor session. Read-only access."`
+
+#### Step 4: Disabling Demo Access After Evaluation
+To immediately revoke evaluator access:
+1. In the **`fedcreditx-api`** Web Service on Render, set:
+   ```env
+   DEMO_AUDITOR_ENABLED=false
+   ```
+2. Click **Save Changes** and redeploy. The endpoint will return HTTP 404 and the UI button will be completely removed.
