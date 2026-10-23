@@ -186,3 +186,21 @@ class FLGlobalModelResponse(BaseModel):
     status: str
 
 
+class AuthConfigResponse(BaseModel):
+    demoAuditorEnabled: bool
+
+
+class DemoLoginRequest(BaseModel):
+    email: Optional[str] = None
+    password: Optional[str] = None
+
+
+class DemoLoginResponse(BaseModel):
+    status: str
+    session_token: str
+    email: str
+    role: str
+    auth_method: str
+    expires_at: str
+
+

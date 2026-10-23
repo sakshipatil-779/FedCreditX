@@ -19,11 +19,14 @@ import io
 import base64
 import secrets
 import hashlib
+import time
+import logging
 from typing import List, Dict, Any, Optional
 import numpy as np
 import pandas as pd
+import bcrypt
 
-from fastapi import FastAPI, HTTPException, Query, Depends, Response, Header
+from fastapi import FastAPI, HTTPException, Query, Depends, Response, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -44,6 +47,9 @@ from backend.app.schemas.credit import (
     FLClientUpdateRequest,
     FLUpdateResponse,
     FLGlobalModelResponse,
+    AuthConfigResponse,
+    DemoLoginRequest,
+    DemoLoginResponse,
 )
 from backend.ml.preprocessing import FEATURE_NAMES, TARGET_NAME
 from backend.ml.model import LogisticRegressionCreditModel
@@ -234,9 +240,15 @@ def init_db():
         email TEXT NOT NULL,
         role TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL
+        expires_at TEXT NOT NULL,
+        auth_method TEXT
     )
     """)
+
+    cur.execute("PRAGMA table_info(server_sessions)")
+    session_columns = [col[1] for col in cur.fetchall()]
+    if "auth_method" not in session_columns and len(session_columns) > 0:
+        cur.execute("ALTER TABLE server_sessions ADD COLUMN auth_method TEXT")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS fl_round_state (
@@ -391,11 +403,32 @@ def get_current_session(
 
     if token:
         cur = db.cursor()
-        cur.execute("SELECT email, role, expires_at FROM server_sessions WHERE session_token = ?", (token,))
+        cur.execute("SELECT email, role, expires_at, auth_method FROM server_sessions WHERE session_token = ?", (token,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=401, detail="Invalid or expired session token.")
-        return {"email": row["email"], "role": row["role"]}
+
+        # Check session expiry if set
+        if row["expires_at"]:
+            try:
+                exp_dt = datetime.datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
+                if datetime.datetime.now(datetime.timezone.utc) > exp_dt:
+                    raise HTTPException(status_code=401, detail="Invalid or expired session token.")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
+        auth_method = "google"
+        try:
+            if row["auth_method"]:
+                auth_method = row["auth_method"]
+        except Exception:
+            pass
+
+        return {"email": row["email"], "role": row["role"], "auth_method": auth_method}
 
     effective_role = (role or x_user_role or "").strip().lower()
     if effective_role in ["bank_officer", "officer"]:
@@ -490,8 +523,8 @@ def select_user_role(
 
     cur = db.cursor()
     cur.execute(
-        "INSERT INTO server_sessions VALUES (?, ?, ?, ?, ?)",
-        (session_token, email, normalized_role, now_iso, expires_at),
+        "INSERT INTO server_sessions (session_token, email, role, created_at, expires_at, auth_method) VALUES (?, ?, ?, ?, ?, ?)",
+        (session_token, email, normalized_role, now_iso, expires_at, "google"),
     )
 
     # Checkpoint 5: Audit event for GRANTED
@@ -513,6 +546,182 @@ def select_user_role(
         email=email,
         role=normalized_role,
         expires_at=expires_at,
+    )
+
+
+# =========================================================================
+# Demo Auditor Authentication (Task B: Rate-Limited, Expiring, Bcrypt Verified)
+# =========================================================================
+
+logger = logging.getLogger("fedcreditx.auth")
+
+DEMO_LOGIN_ATTEMPTS: Dict[str, List[float]] = {}
+DEMO_RATE_LIMIT_WINDOW_SECONDS = 15 * 60  # 15 minutes
+DEMO_RATE_LIMIT_MAX_ATTEMPTS = 5
+
+
+def check_and_record_demo_rate_limit(client_ip: str) -> bool:
+    """
+    In-memory rate limiter per IP address.
+    Allows up to 5 attempts within 15 minutes, blocking the 6th attempt.
+    """
+    now_ts = time.time()
+    attempts = [t for t in DEMO_LOGIN_ATTEMPTS.get(client_ip, []) if now_ts - t < DEMO_RATE_LIMIT_WINDOW_SECONDS]
+    if len(attempts) >= DEMO_RATE_LIMIT_MAX_ATTEMPTS:
+        DEMO_LOGIN_ATTEMPTS[client_ip] = attempts
+        return False
+    attempts.append(now_ts)
+    DEMO_LOGIN_ATTEMPTS[client_ip] = attempts
+    return True
+
+
+def record_demo_audit(
+    db: sqlite3.Connection,
+    email: str,
+    result: str,
+    ip_address: str,
+):
+    """
+    Records an audit event for every demo login attempt.
+    Logs: timestamp, email (or "unknown"), result (success | failed | rate_limited | expired), IP address.
+    NEVER logs plain passwords or password hashes.
+    """
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    audit_id = f"AUDIT-DEMO-{uuid.uuid4().hex[:8]}"
+    clean_email = email.strip().lower() if email and email.strip() else "unknown"
+    safe_metadata = {
+        "email": clean_email,
+        "result": result,
+        "ip_address": ip_address,
+        "auth_method": "demo",
+    }
+    cur = db.cursor()
+    cur.execute(
+        "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            audit_id,
+            now_iso,
+            "DEMO_AUDITOR_AUTH",
+            "demo_auditor",
+            clean_email,
+            result,
+            json.dumps(safe_metadata),
+        ),
+    )
+    db.commit()
+    logger.info("Demo auditor login attempt: email=%s result=%s ip=%s", clean_email, result, ip_address)
+
+
+@app.get("/api/auth/config", response_model=AuthConfigResponse)
+def get_auth_config():
+    """
+    Returns public authentication configuration flags for frontend UI display.
+    """
+    demo_enabled = os.environ.get("DEMO_AUDITOR_ENABLED", "false").strip().lower() == "true"
+    return AuthConfigResponse(demoAuditorEnabled=demo_enabled)
+
+
+@app.post("/api/auth/demo-login", response_model=DemoLoginResponse)
+async def demo_login(
+    request: Request,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Controlled DEMO AUDITOR login endpoint for evaluators.
+    Enforces:
+    - 404 when DEMO_AUDITOR_ENABLED is not "true"
+    - Rate limit: max 5 attempts per IP per 15 minutes (HTTP 429 on 6th attempt)
+    - 403 when current time exceeds DEMO_AUDITOR_EXPIRES_AT ("Demo access has ended.")
+    - Constant-time bcrypt password hash check against DEMO_AUDITOR_PASSWORD_HASH
+    - 401 generic message on wrong email, wrong password, or empty body
+    - Server-side session creation granting strictly the auditor role
+    - Audit logging for every attempt without recording passwords or hashes
+    """
+    demo_enabled = os.environ.get("DEMO_AUDITOR_ENABLED", "false").strip().lower() == "true"
+    if not demo_enabled:
+        raise HTTPException(status_code=404, detail="Demo auditor login is disabled.")
+
+    client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip()
+
+    # Rate limiting check
+    if not check_and_record_demo_rate_limit(client_ip):
+        record_demo_audit(db, "unknown", "rate_limited", client_ip)
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please try again later.")
+
+    # Expiry check
+    expires_at_env = os.environ.get("DEMO_AUDITOR_EXPIRES_AT", "").strip()
+    if expires_at_env:
+        try:
+            exp_dt = datetime.datetime.fromisoformat(expires_at_env.replace("Z", "+00:00"))
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
+            if datetime.datetime.now(datetime.timezone.utc) > exp_dt:
+                record_demo_audit(db, "unknown", "expired", client_ip)
+                raise HTTPException(status_code=403, detail="Demo access has ended.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # Read body safely
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    if not isinstance(body, dict):
+        body = {}
+
+    email = body.get("email")
+    password = body.get("password")
+
+    clean_email = str(email).strip().lower() if email and isinstance(email, str) else "unknown"
+
+    if not email or not password or not isinstance(email, str) or not isinstance(password, str) or not email.strip() or not password.strip():
+        record_demo_audit(db, clean_email, "failed", client_ip)
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    expected_email = os.environ.get("DEMO_AUDITOR_EMAIL", "").strip().lower()
+    expected_hash = os.environ.get("DEMO_AUDITOR_PASSWORD_HASH", "").strip()
+
+    if not expected_email or not expected_hash:
+        record_demo_audit(db, clean_email, "failed", client_ip)
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    email_matches = (email.strip().lower() == expected_email)
+    password_matches = False
+    try:
+        password_matches = bcrypt.checkpw(password.encode("utf-8"), expected_hash.encode("utf-8"))
+    except Exception:
+        password_matches = False
+
+    if not (email_matches and password_matches):
+        record_demo_audit(db, clean_email, "failed", client_ip)
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    # Success: create server-side session with role = 'auditor' and auth_method = 'demo'
+    session_token = f"sess_{secrets.token_urlsafe(32)}"
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    session_expires_at = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)).isoformat()
+
+    cur = db.cursor()
+    cur.execute(
+        "INSERT INTO server_sessions (session_token, email, role, created_at, expires_at, auth_method) VALUES (?, ?, ?, ?, ?, ?)",
+        (session_token, email.strip().lower(), "auditor", now_iso, session_expires_at, "demo"),
+    )
+    record_demo_audit(db, email.strip().lower(), "success", client_ip)
+    db.commit()
+
+    return DemoLoginResponse(
+        status="ok",
+        session_token=session_token,
+        email=email.strip().lower(),
+        role="auditor",
+        auth_method="demo",
+        expires_at=session_expires_at,
     )
 
 
