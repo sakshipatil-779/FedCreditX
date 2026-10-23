@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   IconShield,
   IconCheck,
@@ -24,10 +24,21 @@ interface GoogleUserPayload {
   photoURL?: string;
 }
 
+export interface DemoSessionPayload {
+  sessionToken: string;
+  email: string;
+  role: string;
+  authMethod: string;
+  expiresAt: string;
+}
+
 interface LandingPageProps {
   onGoogleSignIn: (googleUser: GoogleUserPayload) => void;
   onAuthenticated?: (user: FirebaseUser) => void;
+  onDemoAuditorSignIn?: (demoSession: DemoSessionPayload) => void;
 }
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 function GoogleLogo({ className = "w-5 h-5" }: { className?: string }) {
   return (
@@ -52,12 +63,93 @@ function GoogleLogo({ className = "w-5 h-5" }: { className?: string }) {
   );
 }
 
-export function LandingPage({ onGoogleSignIn }: LandingPageProps) {
+export function LandingPage({
+  onGoogleSignIn,
+  onAuthenticated,
+  onDemoAuditorSignIn,
+}: LandingPageProps) {
   const [customEmail, setCustomEmail] = useState("");
   const [customName, setCustomName] = useState("");
+  const [customRole, setCustomRole] = useState<"bank_officer" | "risk_auditor">("bank_officer");
   const [showCustomGoogle, setShowCustomGoogle] = useState(false);
   const [loading, setLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Demo Auditor Authentication State
+  const [demoAuditorEnabled, setDemoAuditorEnabled] = useState(false);
+  const [showDemoAuditorForm, setShowDemoAuditorForm] = useState(false);
+  const [demoEmail, setDemoEmail] = useState("");
+  const [demoPassword, setDemoPassword] = useState("");
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoError, setDemoError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetch(`${API_BASE}/api/auth/config`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (isMounted && data && typeof data.demoAuditorEnabled === "boolean") {
+          setDemoAuditorEnabled(data.demoAuditorEnabled);
+        }
+      })
+      .catch(() => {
+        // Fallback gracefully
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleDemoLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDemoError(null);
+    if (!demoEmail.trim() || !demoPassword) {
+      setDemoError("Invalid email or password.");
+      return;
+    }
+    setDemoLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/demo-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: demoEmail.trim(),
+          password: demoPassword,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Clear plaintext password immediately
+        setDemoPassword("");
+        if (onDemoAuditorSignIn) {
+          onDemoAuditorSignIn({
+            sessionToken: data.session_token,
+            email: data.email,
+            role: data.role,
+            authMethod: data.auth_method || "demo",
+            expiresAt: data.expires_at,
+          });
+        }
+      } else if (res.status === 401) {
+        const errData = await res.json().catch(() => ({}));
+        setDemoError(errData.detail || "Invalid email or password.");
+      } else if (res.status === 403) {
+        const errData = await res.json().catch(() => ({}));
+        setDemoError(errData.detail || "Demo access has ended.");
+      } else if (res.status === 429) {
+        const errData = await res.json().catch(() => ({}));
+        setDemoError(errData.detail || "Too many attempts. Rate limit exceeded.");
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setDemoError(errData.detail || "Login failed. Please verify credentials.");
+      }
+    } catch (err: any) {
+      setDemoError(`Network error: ${err.message}`);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
 
   // Official Firebase Google Popup Sign-In
   const handleRealGooglePopup = async () => {
@@ -200,143 +292,255 @@ export function LandingPage({ onGoogleSignIn }: LandingPageProps) {
           {/* Right Column: Google Authentication Card */}
           <div className="lg:col-span-5" id="auth-portal-card">
             <div className="bg-white rounded-[28px] p-6 sm:p-8 border border-[#E8ECE9] shadow-xl shadow-black/5 space-y-5">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">
-                    Firebase Authentication
-                  </span>
-                  <span className="w-2 h-2 rounded-full bg-[#238354]"></span>
-                </div>
-                <h2 className="text-xl font-extrabold text-[#111713] mt-1">
-                  Sign In with Google
-                </h2>
-                <p className="text-xs text-[#758079] mt-0.5">
-                  Connect your Google account to access your assigned institutional role.
-                </p>
-              </div>
-
-              {/* 1. Official Google Sign-In Popup */}
-              <div className="space-y-3 p-4 rounded-2xl bg-[#F7F9F8] border border-[#E8ECE9]">
-                <button
-                  type="button"
-                  onClick={handleRealGooglePopup}
-                  disabled={loading}
-                  className="w-full py-3.5 px-4 bg-white hover:bg-[#F2F5F3] border-2 border-[#123F36] text-[#111713] rounded-xl transition flex items-center justify-center gap-3 font-bold text-xs sm:text-sm shadow-sm hover:shadow-md cursor-pointer group"
-                >
-                  <GoogleLogo className="w-5 h-5 shrink-0" />
-                  <span>{loading ? "Connecting to Google..." : "Sign In with Google"}</span>
-                </button>
-              </div>
-
-              {/* Separator */}
-              <div className="relative flex py-1 items-center">
-                <div className="flex-grow border-t border-[#E8ECE9]"></div>
-                <span className="flex-shrink mx-3 text-[10px] font-bold text-[#758079] uppercase tracking-wider">
-                  Or 1-Click Institutional Demo Profiles
-                </span>
-                <div className="flex-grow border-t border-[#E8ECE9]"></div>
-              </div>
-
-              {/* Verified Institutional Google Accounts */}
-              <div className="space-y-2.5">
-                {GOOGLE_INSTITUTIONAL_ACCOUNTS.map((acc) => (
-                  <button
-                    key={acc.email}
-                    onClick={() => handleGoogleAccountLogin(acc)}
-                    disabled={loading}
-                    className="w-full p-3 bg-white hover:bg-[#F7F9F8] border border-[#E8ECE9] hover:border-[#123F36] rounded-2xl transition flex items-center justify-between group cursor-pointer text-left shadow-xs"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-[#E7F3EB] text-[#123F36] font-bold text-xs flex items-center justify-center border border-[#C5E4D1] shrink-0">
-                        {acc.avatar}
+              {showDemoAuditorForm ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E8ECE9]">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">
+                        Supervisory Evaluation Access
                       </div>
-                      <div>
-                        <div className="text-xs font-bold text-[#111713] flex items-center gap-2">
-                          {acc.displayName}
-                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                            acc.role === "bank_officer"
-                              ? "bg-[#E7F3EB] text-[#123F36]"
-                              : "bg-[#FEF3C7] text-[#92400E]"
-                          }`}>
-                            {acc.role === "bank_officer" ? "Bank Officer" : "Supervisory Auditor"}
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-[#758079] truncate">{acc.email}</div>
-                      </div>
+                      <h3 className="text-lg font-extrabold text-[#111713]">
+                        Demo Auditor Sign In
+                      </h3>
                     </div>
-                    <div className="w-7 h-7 rounded-full bg-white border border-[#E8ECE9] flex items-center justify-center group-hover:bg-[#123F36] group-hover:text-white transition shrink-0">
-                      <GoogleLogo className="w-3.5 h-3.5" />
-                    </div>
-                  </button>
-                ))}
-              </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowDemoAuditorForm(false);
+                        setDemoError(null);
+                        setDemoPassword("");
+                      }}
+                      className="text-xs font-semibold text-[#758079] hover:text-[#111713] cursor-pointer"
+                    >
+                      &larr; Back
+                    </button>
+                  </div>
 
-              {/* Custom Google Workspace Account Toggle */}
-              <div className="pt-2 border-t border-[#E8ECE9] space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-[#758079]">Need to sign in with another email?</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowCustomGoogle(!showCustomGoogle)}
-                    className="text-xs font-bold text-[#123F36] hover:underline cursor-pointer"
-                  >
-                    {showCustomGoogle ? "Hide form" : "Enter email directly"}
-                  </button>
-                </div>
+                  <p className="text-xs text-[#758079]">
+                    Enter evaluator credentials for direct read-only access to Audit Logs and Holdout Benchmark metrics.
+                  </p>
 
-                {showCustomGoogle && (
-                  <form onSubmit={handleCustomGoogleSubmit} className="space-y-3 pt-2">
+                  <form onSubmit={handleDemoLoginSubmit} autoComplete="off" className="space-y-3.5">
                     <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-[#111713]">Google Account Email</label>
+                      <label className="text-[11px] font-semibold text-[#111713]">
+                        Auditor Email
+                      </label>
                       <input
                         type="email"
                         required
-                        value={customEmail}
-                        onChange={(e) => setCustomEmail(e.target.value)}
-                        placeholder="officer.patel@gmail.com"
+                        autoComplete="off"
+                        value={demoEmail}
+                        onChange={(e) => setDemoEmail(e.target.value)}
+                        placeholder="auditor@fedcreditx.org"
                         className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
                       />
                     </div>
 
                     <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-[#111713]">Full Name</label>
+                      <label className="text-[11px] font-semibold text-[#111713]">
+                        Password
+                      </label>
                       <input
-                        type="text"
-                        value={customName}
-                        onChange={(e) => setCustomName(e.target.value)}
-                        placeholder="e.g. Neha Patel"
+                        type="password"
+                        required
+                        autoComplete="new-password"
+                        value={demoPassword}
+                        onChange={(e) => setDemoPassword(e.target.value)}
+                        placeholder="••••••••••••"
                         className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
                       />
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-[#111713]">Assigned Role</label>
-                      <select
-                        value={customRole}
-                        onChange={(e) => setCustomRole(e.target.value as any)}
-                        className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
+                    {demoError && (
+                      <div className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FCA5A5] text-[#CF5555] text-xs font-semibold">
+                        {demoError}
+                      </div>
+                    )}
+
+                    <div className="pt-2 space-y-2">
+                      <button
+                        type="submit"
+                        disabled={demoLoading}
+                        className="w-full py-3 bg-[#123F36] hover:bg-[#1b5549] text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm disabled:opacity-50"
                       >
-                        <option value="bank_officer">Bank Underwriting Officer</option>
-                        <option value="risk_auditor">Compliance Risk Auditor</option>
-                      </select>
+                        {demoLoading ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <span>Sign In as Demo Auditor</span>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDemoAuditorForm(false);
+                          setDemoError(null);
+                          setDemoPassword("");
+                        }}
+                        className="w-full py-2 text-center text-xs font-semibold text-[#758079] hover:text-[#111713] cursor-pointer"
+                      >
+                        Return to Google sign-in
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#123F36]">
+                        Firebase Authentication
+                      </span>
+                      <span className="w-2 h-2 rounded-full bg-[#238354]"></span>
+                    </div>
+                    <h2 className="text-xl font-extrabold text-[#111713] mt-1">
+                      Sign In with Google
+                    </h2>
+                    <p className="text-xs text-[#758079] mt-0.5">
+                      Connect your Google account to access your assigned institutional role.
+                    </p>
+                  </div>
+
+                  {/* 1. Official Google Sign-In Popup */}
+                  <div className="space-y-3 p-4 rounded-2xl bg-[#F7F9F8] border border-[#E8ECE9]">
+                    <button
+                      type="button"
+                      onClick={handleRealGooglePopup}
+                      disabled={loading}
+                      className="w-full py-3.5 px-4 bg-white hover:bg-[#F2F5F3] border-2 border-[#123F36] text-[#111713] rounded-xl transition flex items-center justify-center gap-3 font-bold text-xs sm:text-sm shadow-sm hover:shadow-md cursor-pointer group"
+                    >
+                      <GoogleLogo className="w-5 h-5 shrink-0" />
+                      <span>{loading ? "Connecting to Google..." : "Sign In with Google"}</span>
+                    </button>
+
+                    {demoAuditorEnabled && (
+                      <div className="pt-1 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowDemoAuditorForm(true);
+                            setDemoError(null);
+                          }}
+                          className="text-xs font-semibold text-[#123F36] hover:text-[#1b5549] hover:underline cursor-pointer transition inline-flex items-center gap-1.5"
+                        >
+                          <span>Demo auditor login</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#E7F3EB] text-[#123F36] font-bold">Evaluator</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Separator */}
+                  <div className="relative flex py-1 items-center">
+                    <div className="flex-grow border-t border-[#E8ECE9]"></div>
+                    <span className="flex-shrink mx-3 text-[10px] font-bold text-[#758079] uppercase tracking-wider">
+                      Or 1-Click Institutional Demo Profiles
+                    </span>
+                    <div className="flex-grow border-t border-[#E8ECE9]"></div>
+                  </div>
+
+                  {/* Verified Institutional Google Accounts */}
+                  <div className="space-y-2.5">
+                    {GOOGLE_INSTITUTIONAL_ACCOUNTS.map((acc) => (
+                      <button
+                        key={acc.email}
+                        onClick={() => handleGoogleAccountLogin(acc)}
+                        disabled={loading}
+                        className="w-full p-3 bg-white hover:bg-[#F7F9F8] border border-[#E8ECE9] hover:border-[#123F36] rounded-2xl transition flex items-center justify-between group cursor-pointer text-left shadow-xs"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-[#E7F3EB] text-[#123F36] font-bold text-xs flex items-center justify-center border border-[#C5E4D1] shrink-0">
+                            {acc.avatar}
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-[#111713] flex items-center gap-2">
+                              {acc.displayName}
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                                acc.role === "bank_officer"
+                                  ? "bg-[#E7F3EB] text-[#123F36]"
+                                  : "bg-[#FEF3C7] text-[#92400E]"
+                              }`}>
+                                {acc.role === "bank_officer" ? "Bank Officer" : "Supervisory Auditor"}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-[#758079] truncate">{acc.email}</div>
+                          </div>
+                        </div>
+                        <div className="w-7 h-7 rounded-full bg-white border border-[#E8ECE9] flex items-center justify-center group-hover:bg-[#123F36] group-hover:text-white transition shrink-0">
+                          <GoogleLogo className="w-3.5 h-3.5" />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Custom Google Workspace Account Toggle */}
+                  <div className="pt-2 border-t border-[#E8ECE9] space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[#758079]">Need to sign in with another email?</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowCustomGoogle(!showCustomGoogle)}
+                        className="text-xs font-bold text-[#123F36] hover:underline cursor-pointer"
+                      >
+                        {showCustomGoogle ? "Hide form" : "Enter email directly"}
+                      </button>
                     </div>
 
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="w-full py-2.5 bg-[#123F36] hover:bg-[#1b5549] text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
-                    >
-                      <GoogleLogo className="w-4 h-4" />
-                      <span>Sign In with Custom Google</span>
-                    </button>
-                  </form>
-                )}
-              </div>
+                    {showCustomGoogle && (
+                      <form onSubmit={handleCustomGoogleSubmit} className="space-y-3 pt-2">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-[#111713]">Google Account Email</label>
+                          <input
+                            type="email"
+                            required
+                            value={customEmail}
+                            onChange={(e) => setCustomEmail(e.target.value)}
+                            placeholder="officer.patel@gmail.com"
+                            className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
+                          />
+                        </div>
 
-              {authError && (
-                <div className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FCA5A5] text-[#CF5555] text-xs font-semibold">
-                  {authError}
-                </div>
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-[#111713]">Full Name</label>
+                          <input
+                            type="text"
+                            value={customName}
+                            onChange={(e) => setCustomName(e.target.value)}
+                            placeholder="e.g. Neha Patel"
+                            className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-[#111713]">Assigned Role</label>
+                          <select
+                            value={customRole}
+                            onChange={(e) => setCustomRole(e.target.value as any)}
+                            className="w-full bg-[#F7F8F7] border border-[#E8ECE9] rounded-xl p-2.5 text-xs text-[#111713] focus:outline-none focus:border-[#123F36]"
+                          >
+                            <option value="bank_officer">Bank Underwriting Officer</option>
+                            <option value="risk_auditor">Compliance Risk Auditor</option>
+                          </select>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={loading}
+                          className="w-full py-2.5 bg-[#123F36] hover:bg-[#1b5549] text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                        >
+                          <GoogleLogo className="w-4 h-4" />
+                          <span>Sign In with Custom Google</span>
+                        </button>
+                      </form>
+                    )}
+                  </div>
+
+                  {authError && (
+                    <div className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FCA5A5] text-[#CF5555] text-xs font-semibold">
+                      {authError}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

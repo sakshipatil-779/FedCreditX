@@ -1021,6 +1021,24 @@ export default function FedCreditXDashboard() {
             });
             setRoleModalError(null);
           }}
+          onDemoAuditorSignIn={(demoSession) => {
+            const demoUser: FirebaseUser = {
+              uid: `demo_${demoSession.email}`,
+              email: demoSession.email,
+              displayName: "Demo Auditor",
+              role: "risk_auditor",
+              authMethod: "demo",
+              createdAt: new Date().toISOString(),
+            };
+            if (typeof window !== "undefined") {
+              localStorage.setItem("fedcreditx_auth_user", JSON.stringify(demoUser));
+              localStorage.setItem("fedcreditx_session_token", demoSession.sessionToken);
+            }
+            setCurrentUser(demoUser);
+            setPendingGoogleUser(null);
+            setRoleModalError(null);
+            setActiveScreen("audit");
+          }}
         />
         {pendingGoogleUser && (
           <RoleSelectModal
@@ -1393,6 +1411,19 @@ export default function FedCreditXDashboard() {
               </div>
             </div>
           </header>
+
+          {/* Demo Auditor Session Banner */}
+          {currentUser?.authMethod === "demo" && (
+            <div className="bg-[#FEF3C7] border-b border-[#FDE68A] px-6 py-2.5 flex items-center justify-between text-xs text-[#92400E]">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[#D97706] animate-pulse"></span>
+                <span className="font-bold">Demo auditor session. Read-only access.</span>
+              </div>
+              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-[#FDE68A] text-[#92400E]">
+                Auditor Mode
+              </span>
+            </div>
+          )}
 
           {/* Main Content Body */}
           <main className="flex-1 p-5 sm:p-7 lg:p-8 space-y-6 overflow-y-auto">

@@ -15,6 +15,7 @@ export interface FirebaseUser {
   idToken?: string;
   refreshToken?: string;
   createdAt: string;
+  authMethod?: string;
 }
 
 // User-provided Firebase configuration
