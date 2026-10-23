@@ -75,6 +75,19 @@ class TestRiskRulesAndThresholds(unittest.TestCase):
         self.assertIn("confirm", c["required_handling"].lower())
 
 
+import base64
+
+def create_mock_jwt(email: str, name: str = "Test User") -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "none"}).encode()).decode().rstrip("=")
+    payload = base64.urlsafe_b64encode(json.dumps({
+        "email": email,
+        "name": name,
+        "sub": f"google_{email}",
+        "email_verified": True,
+    }).encode()).decode().rstrip("=")
+    return f"{header}.{payload}.sig"
+
+
 class TestOfficerDecisionAndAuditWorkflow(unittest.TestCase):
     """
     API integration tests for scoring, officer review, override validation, and audit persistence.
@@ -84,6 +97,12 @@ class TestOfficerDecisionAndAuditWorkflow(unittest.TestCase):
     def setUpClass(cls):
         init_db()
         cls.client = TestClient(app)
+        auditor_token = create_mock_jwt("auditor@fedcreditx.org")
+        auditor_res = cls.client.post("/api/auth/select-role", json={
+            "id_token": auditor_token,
+            "requested_role": "risk_auditor",
+        }).json()
+        cls.auditor_headers = {"Authorization": f"Bearer {auditor_res['session_token']}"}
 
     def test_scoring_uses_decision_tree_and_three_primary_items(self):
         """Verifies scoring response contract matches Step 4 (level, top reasons, recommendation)."""
@@ -185,7 +204,7 @@ class TestOfficerDecisionAndAuditWorkflow(unittest.TestCase):
         audit_id = dec_res.json()["audit_event_id"]
 
         # Retrieve audit events filtered by entity_id
-        audit_res = self.client.get("/api/audit?resource_id=DEMO-B-002&limit=5")
+        audit_res = self.client.get("/api/audit?resource_id=DEMO-B-002&limit=5", headers=self.auditor_headers)
         self.assertEqual(audit_res.status_code, 200)
         events = audit_res.json()
         self.assertGreater(len(events), 0)
@@ -205,13 +224,13 @@ class TestOfficerDecisionAndAuditWorkflow(unittest.TestCase):
     def test_audit_filters_and_export(self):
         """Verifies audit log filtering by event_type, actor, and decision, plus CSV export."""
         # Test filtering by event_type
-        res = self.client.get("/api/audit?event_type=CASE_SCORED&limit=10")
+        res = self.client.get("/api/audit?event_type=CASE_SCORED&limit=10", headers=self.auditor_headers)
         self.assertEqual(res.status_code, 200)
         for ev in res.json():
             self.assertEqual(ev["event_type"], "CASE_SCORED")
 
         # Test CSV export
-        export_res = self.client.get("/api/audit/export?limit=50")
+        export_res = self.client.get("/api/audit/export?limit=50", headers=self.auditor_headers)
         self.assertEqual(export_res.status_code, 200)
         self.assertEqual(export_res.headers["content-type"], "text/csv; charset=utf-8")
         csv_text = export_res.text

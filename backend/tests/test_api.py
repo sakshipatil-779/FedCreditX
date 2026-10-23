@@ -12,6 +12,7 @@ Tests:
 8. Input validation and error cases (invalid lender, missing case)
 """
 
+import base64
 import unittest
 import json
 import sqlite3
@@ -20,11 +21,28 @@ from fastapi.testclient import TestClient
 from backend.app.main import app, DB_PATH, init_db
 
 
+def create_mock_jwt(email: str, name: str = "Test User") -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "none"}).encode()).decode().rstrip("=")
+    payload = base64.urlsafe_b64encode(json.dumps({
+        "email": email,
+        "name": name,
+        "sub": f"google_{email}",
+        "email_verified": True,
+    }).encode()).decode().rstrip("=")
+    return f"{header}.{payload}.sig"
+
+
 class TestFedCreditXAPI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         init_db()
         cls.client = TestClient(app)
+        auditor_token = create_mock_jwt("auditor@fedcreditx.org")
+        auditor_res = cls.client.post("/api/auth/select-role", json={
+            "id_token": auditor_token,
+            "requested_role": "risk_auditor",
+        }).json()
+        cls.auditor_headers = {"Authorization": f"Bearer {auditor_res['session_token']}"}
 
     def test_health_check(self):
         response = self.client.get("/api/health")
@@ -96,7 +114,7 @@ class TestFedCreditXAPI(unittest.TestCase):
         self.assertIn("audit_event_id", data)
 
     def test_metrics_endpoint(self):
-        response = self.client.get("/api/metrics")
+        response = self.client.get("/api/metrics", headers=self.auditor_headers)
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("centralized_baseline", data)
@@ -108,7 +126,7 @@ class TestFedCreditXAPI(unittest.TestCase):
             self.assertIn("roc_auc", data["federated_learning"])
 
     def test_audit_log_endpoint(self):
-        response = self.client.get("/api/audit?limit=10")
+        response = self.client.get("/api/audit?limit=10", headers=self.auditor_headers)
         self.assertEqual(response.status_code, 200)
         events = response.json()
         self.assertIsInstance(events, list)
