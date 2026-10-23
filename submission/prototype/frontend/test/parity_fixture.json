@@ -1,0 +1,438 @@
+{
+  "preprocessor": {
+    "feature_names": [
+      "monthly_income_band_value",
+      "debt_to_income_ratio",
+      "late_payment_count_12m",
+      "credit_utilization_ratio",
+      "income_variability",
+      "loan_amount_to_income",
+      "account_history_months",
+      "utility_payment_consistency"
+    ],
+    "means": {
+      "monthly_income_band_value": 4669.478125,
+      "debt_to_income_ratio": 0.3615513888888889,
+      "late_payment_count_12m": 0.5204861111111111,
+      "credit_utilization_ratio": 0.428911875,
+      "income_variability": 0.31155951388888886,
+      "loan_amount_to_income": 3.488787847222222,
+      "account_history_months": 87.18923611111111,
+      "utility_payment_consistency": 0.6284670833333333
+    },
+    "stds": {
+      "monthly_income_band_value": 2724.967917755911,
+      "debt_to_income_ratio": 0.15558212815820993,
+      "late_payment_count_12m": 0.8918596596914095,
+      "credit_utilization_ratio": 0.22161115585784721,
+      "income_variability": 0.2140558640409537,
+      "loan_amount_to_income": 1.7197822301330703,
+      "account_history_months": 58.25781977292191,
+      "utility_payment_consistency": 0.18309679065954812
+    }
+  },
+  "raw_rows": [
+    {
+      "monthly_income_band_value": 6781.05,
+      "debt_to_income_ratio": 0.1045,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.4371,
+      "income_variability": 0.01,
+      "loan_amount_to_income": 2.7169,
+      "account_history_months": 126,
+      "utility_payment_consistency": 0.8295
+    },
+    {
+      "monthly_income_band_value": 3960.03,
+      "debt_to_income_ratio": 0.2081,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.2307,
+      "income_variability": 0.0321,
+      "loan_amount_to_income": 1.3636,
+      "account_history_months": 218,
+      "utility_payment_consistency": 0.8111
+    },
+    {
+      "monthly_income_band_value": 8104.55,
+      "debt_to_income_ratio": 0.3957,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.2315,
+      "income_variability": 0.1825,
+      "loan_amount_to_income": 5.5248,
+      "account_history_months": 238,
+      "utility_payment_consistency": 0.8257
+    },
+    {
+      "monthly_income_band_value": 8744.9,
+      "debt_to_income_ratio": 0.4693,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.4063,
+      "income_variability": 0.0668,
+      "loan_amount_to_income": 2.2159,
+      "account_history_months": 71,
+      "utility_payment_consistency": 0.5291
+    },
+    {
+      "monthly_income_band_value": 2750.63,
+      "debt_to_income_ratio": 0.1133,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.1843,
+      "income_variability": 0.0744,
+      "loan_amount_to_income": 2.3993,
+      "account_history_months": 209,
+      "utility_payment_consistency": 0.7438
+    },
+    {
+      "monthly_income_band_value": 3565.74,
+      "debt_to_income_ratio": 0.206,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.4307,
+      "income_variability": 0.0473,
+      "loan_amount_to_income": 2.5069,
+      "account_history_months": 180,
+      "utility_payment_consistency": 0.651
+    },
+    {
+      "monthly_income_band_value": 6317.86,
+      "debt_to_income_ratio": 0.1235,
+      "late_payment_count_12m": 1,
+      "credit_utilization_ratio": 0.2895,
+      "income_variability": 0.0256,
+      "loan_amount_to_income": 3.7536,
+      "account_history_months": 156,
+      "utility_payment_consistency": 0.9095
+    },
+    {
+      "monthly_income_band_value": 5289.63,
+      "debt_to_income_ratio": 0.3378,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.3457,
+      "income_variability": 0.027,
+      "loan_amount_to_income": 2.2999,
+      "account_history_months": 60,
+      "utility_payment_consistency": 0.5713
+    },
+    {
+      "monthly_income_band_value": 5962.71,
+      "debt_to_income_ratio": 0.264,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.3466,
+      "income_variability": 0.1104,
+      "loan_amount_to_income": 2.5559,
+      "account_history_months": 173,
+      "utility_payment_consistency": 0.7937
+    },
+    {
+      "monthly_income_band_value": 4267.5,
+      "debt_to_income_ratio": 0.2672,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.1348,
+      "income_variability": 0.1335,
+      "loan_amount_to_income": 4.693,
+      "account_history_months": 156,
+      "utility_payment_consistency": 0.7659
+    },
+    {
+      "monthly_income_band_value": 8533.54,
+      "debt_to_income_ratio": 0.2216,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.0928,
+      "income_variability": 0.0329,
+      "loan_amount_to_income": 4.4,
+      "account_history_months": 120,
+      "utility_payment_consistency": 0.7898
+    },
+    {
+      "monthly_income_band_value": 8193.67,
+      "debt_to_income_ratio": 0.3317,
+      "late_payment_count_12m": 1,
+      "credit_utilization_ratio": 0.2727,
+      "income_variability": 0.1439,
+      "loan_amount_to_income": 2.4791,
+      "account_history_months": 150,
+      "utility_payment_consistency": 0.7851
+    },
+    {
+      "monthly_income_band_value": 6163.58,
+      "debt_to_income_ratio": 0.2015,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.2163,
+      "income_variability": 0.3394,
+      "loan_amount_to_income": 2.5215,
+      "account_history_months": 69,
+      "utility_payment_consistency": 0.947
+    },
+    {
+      "monthly_income_band_value": 9422.88,
+      "debt_to_income_ratio": 0.4057,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.2409,
+      "income_variability": 0.1289,
+      "loan_amount_to_income": 0.7877,
+      "account_history_months": 158,
+      "utility_payment_consistency": 0.8341
+    },
+    {
+      "monthly_income_band_value": 7237.3,
+      "debt_to_income_ratio": 0.1341,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.4626,
+      "income_variability": 0.1641,
+      "loan_amount_to_income": 2.9741,
+      "account_history_months": 57,
+      "utility_payment_consistency": 0.6269
+    },
+    {
+      "monthly_income_band_value": 4256.84,
+      "debt_to_income_ratio": 0.3399,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.3964,
+      "income_variability": 0.098,
+      "loan_amount_to_income": 4.0911,
+      "account_history_months": 85,
+      "utility_payment_consistency": 0.8464
+    },
+    {
+      "monthly_income_band_value": 6956.98,
+      "debt_to_income_ratio": 0.3232,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.305,
+      "income_variability": 0.1307,
+      "loan_amount_to_income": 2.2405,
+      "account_history_months": 130,
+      "utility_payment_consistency": 0.7966
+    },
+    {
+      "monthly_income_band_value": 4090.6,
+      "debt_to_income_ratio": 0.1301,
+      "late_payment_count_12m": 3,
+      "credit_utilization_ratio": 0.2722,
+      "income_variability": 0.1317,
+      "loan_amount_to_income": 5.1054,
+      "account_history_months": 59,
+      "utility_payment_consistency": 0.5357
+    },
+    {
+      "monthly_income_band_value": 8530.3,
+      "debt_to_income_ratio": 0.4265,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.2238,
+      "income_variability": 0.0613,
+      "loan_amount_to_income": 1.1474,
+      "account_history_months": 221,
+      "utility_payment_consistency": 0.9776
+    },
+    {
+      "monthly_income_band_value": 5884.22,
+      "debt_to_income_ratio": 0.2041,
+      "late_payment_count_12m": 0,
+      "credit_utilization_ratio": 0.2648,
+      "income_variability": 0.1184,
+      "loan_amount_to_income": 1.7325,
+      "account_history_months": 215,
+      "utility_payment_consistency": 0.6728
+    }
+  ],
+  "expected_transformed": [
+    [
+      0.7748978734016418,
+      -1.652190923690796,
+      -0.583596408367157,
+      0.03694816306233406,
+      -1.408788800239563,
+      -0.4488288164138794,
+      0.6661897897720337,
+      1.0979597568511963
+    ],
+    [
+      -0.2603510022163391,
+      -0.9863047003746033,
+      -0.583596408367157,
+      -0.8944128751754761,
+      -1.3055447340011597,
+      -1.235730767250061,
+      2.2453768253326416,
+      0.997466504573822
+    ],
+    [
+      1.2605916261672974,
+      0.21948929131031036,
+      -0.583596408367157,
+      -0.8908029794692993,
+      -0.6029244661331177,
+      1.183877944946289,
+      2.5886783599853516,
+      1.077205777168274
+    ],
+    [
+      1.495585322380066,
+      0.69255131483078,
+      -0.583596408367157,
+      -0.10203400999307632,
+      -1.1434375047683716,
+      -0.7401447892189026,
+      -0.2778894901275635,
+      -0.5427024960517883
+    ],
+    [
+      -0.7041727304458618,
+      -1.5956292152404785,
+      -0.583596408367157,
+      -1.1037886142730713,
+      -1.1079328060150146,
+      -0.6335033774375916,
+      2.090891122817993,
+      0.6299013495445251
+    ],
+    [
+      -0.405046284198761,
+      -0.9998024106025696,
+      -0.583596408367157,
+      0.00806874968111515,
+      -1.2345352172851562,
+      -0.5709373354911804,
+      1.5931040048599243,
+      0.12306559830904007
+    ],
+    [
+      0.6049178838729858,
+      -1.5300689935684204,
+      0.5376561880111694,
+      -0.6290832757949829,
+      -1.335910677909851,
+      0.1539800465106964,
+      1.1811420917510986,
+      1.5348871946334839
+    ],
+    [
+      0.22758135199546814,
+      -0.15266142785549164,
+      -0.583596408367157,
+      -0.37548595666885376,
+      -1.329370379447937,
+      -0.6913014054298401,
+      -0.4667053520679474,
+      -0.31222328543663025
+    ],
+    [
+      0.4745860993862152,
+      -0.6270089745521545,
+      -0.583596408367157,
+      -0.3714247941970825,
+      -0.9397523999214172,
+      -0.5424453616142273,
+      1.472948431968689,
+      0.9024348258972168
+    ],
+    [
+      -0.1475166380405426,
+      -0.6064410209655762,
+      -0.583596408367157,
+      -1.3271528482437134,
+      -0.8318366408348083,
+      0.7002120018005371,
+      1.1811420917510986,
+      0.7506025433540344
+    ],
+    [
+      1.4180210828781128,
+      -0.8995338678359985,
+      -0.583596408367157,
+      -1.5166740417480469,
+      -1.3018074035644531,
+      0.5298416018486023,
+      0.5631992816925049,
+      0.881134569644928
+    ],
+    [
+      1.2932966947555542,
+      -0.19186900556087494,
+      0.5376561880111694,
+      -0.7048917412757874,
+      -0.7832512259483337,
+      -0.5871021747589111,
+      1.0781515836715698,
+      0.8554651141166687
+    ],
+    [
+      0.5483007431030273,
+      -1.0287261009216309,
+      -0.583596408367157,
+      -0.9593915939331055,
+      0.1300617754459381,
+      -0.5624478459358215,
+      -0.31221964955329895,
+      1.7396968603134155
+    ],
+    [
+      1.744388222694397,
+      0.2837640345096588,
+      -0.583596408367157,
+      -0.8483863472938538,
+      -0.8533263802528381,
+      -1.5705987215042114,
+      1.2154722213745117,
+      1.1230831146240234
+    ],
+    [
+      0.942331075668335,
+      -1.4619377851486206,
+      -0.583596408367157,
+      0.1520145684480667,
+      -0.6888833045959473,
+      -0.2992750108242035,
+      -0.5182005763053894,
+      -0.008558769710361958
+    ],
+    [
+      -0.15142862498760223,
+      -0.13916373252868652,
+      -0.583596408367157,
+      -0.14670684933662415,
+      -0.997681200504303,
+      0.3502258360385895,
+      -0.03757840767502785,
+      1.1902607679367065
+    ],
+    [
+      0.8394601345062256,
+      -0.24650253355503082,
+      -0.583596408367157,
+      -0.5591409802436829,
+      -0.844917356967926,
+      -0.7258406281471252,
+      0.7348501086235046,
+      0.9182734489440918
+    ],
+    [
+      -0.21243484318256378,
+      -1.4876476526260376,
+      2.7801613807678223,
+      -0.7071479558944702,
+      -0.8402456641197205,
+      0.9400097727775574,
+      -0.48387041687965393,
+      -0.5066559910774231
+    ],
+    [
+      1.4168320894241333,
+      0.4174554646015167,
+      -0.583596408367157,
+      -0.9255484938621521,
+      -1.1691317558288574,
+      -1.361444354057312,
+      2.296872138977051,
+      1.906821608543396
+    ],
+    [
+      0.4457820951938629,
+      -1.012014627456665,
+      -0.583596408367157,
+      -0.7405397891998291,
+      -0.9023789763450623,
+      -1.0212268829345703,
+      2.1938817501068115,
+      0.24212831258773804
+    ]
+  ]
+}

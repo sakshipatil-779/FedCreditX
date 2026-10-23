@@ -29,6 +29,7 @@ import {
   signInWithEmailPassword,
   FirebaseUser,
 } from "./lib/firebase";
+import { preprocessRows, trainLogisticRegressionSGD } from "./lib/flTrainer";
 
 type PrimaryScreen = "decision" | "approvals" | "audit" | "research" | "metrics" | "about";
 
@@ -124,7 +125,7 @@ interface ApprovalItem {
   history: ApprovalHistoryItem[];
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const API_BASE = "";
 
 export default function FedCreditXDashboard() {
   // 1. Authentication State
@@ -213,14 +214,20 @@ export default function FedCreditXDashboard() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
-  // 10. Officer Browser-Side Training State (Part B)
+  // 10. Officer Browser-Side Training State (Part B & E)
   const [officerCsvFile, setOfficerCsvFile] = useState<File | null>(null);
   const [parsedCsvData, setParsedCsvData] = useState<{ X: number[][]; y: number[] } | null>(null);
   const [csvParseError, setCsvParseError] = useState<string | null>(null);
   const [officerTrainingProgress, setOfficerTrainingProgress] = useState<number>(0);
   const [isOfficerTraining, setIsOfficerTraining] = useState<boolean>(false);
   const [officerTrainingMessage, setOfficerTrainingMessage] = useState<string | null>(null);
-  const [officerDpEnabled, setOfficerDpEnabled] = useState<boolean>(true);
+  const [officerTrainingError, setOfficerTrainingError] = useState<string | null>(null);
+  const [officerFailedStep, setOfficerFailedStep] = useState<string | null>(null);
+  const [officerHttpStatus, setOfficerHttpStatus] = useState<number | null>(null);
+  const [officerTechnicalDetails, setOfficerTechnicalDetails] = useState<string | null>(null);
+  const [showOfficerAuditorDetails, setShowOfficerAuditorDetails] = useState<boolean>(false);
+  const [isLoadingSamplePartner, setIsLoadingSamplePartner] = useState<boolean>(false);
+  const [officerDpEnabled, setOfficerDpEnabled] = useState<boolean>(false);
   const [inAppNotice, setInAppNotice] = useState<string | null>(null);
 
   const getAuthHeaders = (): Record<string, string> => {
@@ -567,7 +574,7 @@ export default function FedCreditXDashboard() {
         headers["Authorization"] = `Bearer ${sessionToken}`;
         headers["X-Session-Token"] = sessionToken;
       }
-      const res = await fetch(`${API_BASE}/api/metrics?role=${userRole}`, {
+      const res = await fetch(`${API_BASE}/api/metrics`, {
         headers,
       });
       if (res.ok) {
@@ -827,6 +834,67 @@ export default function FedCreditXDashboard() {
     }
   };
 
+  // Helper to validate and parse applicant CSV rows
+  const parseAndSetCsvText = (text: string): boolean => {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length < 2) {
+      setCsvParseError("CSV must contain a header row and at least 1 applicant record.");
+      return false;
+    }
+    const rawHeaders = lines[0].split(",").map((h) => h.trim().replace(/^["']|["']$/g, ""));
+    const requiredFeatures = [
+      "monthly_income_band_value",
+      "debt_to_income_ratio",
+      "late_payment_count_12m",
+      "credit_utilization_ratio",
+      "income_variability",
+      "loan_amount_to_income",
+      "account_history_months",
+      "utility_payment_consistency",
+    ];
+    const targetCol = "defaulted";
+    const missing = [...requiredFeatures, targetCol].filter((col) => !rawHeaders.includes(col));
+    if (missing.length > 0) {
+      setCsvParseError(`Missing required columns: ${missing.join(", ")}`);
+      return false;
+    }
+
+    const colIndices: Record<string, number> = {};
+    rawHeaders.forEach((h, idx) => {
+      colIndices[h] = idx;
+    });
+
+    const X: number[][] = [];
+    const y: number[] = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(",").map((p) => p.trim());
+      if (parts.length < rawHeaders.length) continue;
+      const rowVals: number[] = [];
+      let hasNan = false;
+      for (const feat of requiredFeatures) {
+        const val = parseFloat(parts[colIndices[feat]]);
+        if (isNaN(val)) {
+          hasNan = true;
+          break;
+        }
+        rowVals.push(val);
+      }
+      const label = parseFloat(parts[colIndices[targetCol]]);
+      if (hasNan || isNaN(label)) continue;
+      X.push(rowVals);
+      y.push(label >= 0.5 ? 1 : 0);
+    }
+
+    if (X.length === 0) {
+      setCsvParseError("No valid numeric applicant records found in CSV.");
+      return false;
+    }
+    setParsedCsvData({ X, y });
+    setCsvParseError(null);
+    return true;
+  };
+
   // CSV File Handler for Officer Local Training
   const handleCsvFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -834,256 +902,235 @@ export default function FedCreditXDashboard() {
     setOfficerCsvFile(file);
     setCsvParseError(null);
     setOfficerTrainingMessage(null);
+    setOfficerTrainingError(null);
     setOfficerTrainingProgress(0);
 
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-      if (lines.length < 2) {
-        setCsvParseError("CSV must contain a header row and at least 1 applicant record.");
-        return;
-      }
-      const rawHeaders = lines[0].split(",").map((h) => h.trim().replace(/^["']|["']$/g, ""));
-      const requiredFeatures = [
-        "monthly_income_band_value",
-        "debt_to_income_ratio",
-        "late_payment_count_12m",
-        "credit_utilization_ratio",
-        "income_variability",
-        "loan_amount_to_income",
-        "account_history_months",
-        "utility_payment_consistency",
-      ];
-      const targetCol = "defaulted";
-      const missing = [...requiredFeatures, targetCol].filter((col) => !rawHeaders.includes(col));
-      if (missing.length > 0) {
-        setCsvParseError(`Missing required columns: ${missing.join(", ")}`);
-        return;
-      }
-
-      const colIndices: Record<string, number> = {};
-      rawHeaders.forEach((h, idx) => {
-        colIndices[h] = idx;
-      });
-
-      const X: number[][] = [];
-      const y: number[] = [];
-
-      for (let i = 1; i < lines.length; i++) {
-        const parts = lines[i].split(",").map((p) => p.trim());
-        if (parts.length < rawHeaders.length) continue;
-        const rowVals: number[] = [];
-        let hasNan = false;
-        for (const feat of requiredFeatures) {
-          const val = parseFloat(parts[colIndices[feat]]);
-          if (isNaN(val)) {
-            hasNan = true;
-            break;
-          }
-          rowVals.push(val);
-        }
-        const label = parseFloat(parts[colIndices[targetCol]]);
-        if (hasNan || isNaN(label)) continue;
-        X.push(rowVals);
-        y.push(label >= 0.5 ? 1 : 0);
-      }
-
-      if (X.length === 0) {
-        setCsvParseError("No valid numeric applicant records found in CSV.");
-        return;
-      }
-      setParsedCsvData({ X, y });
+      parseAndSetCsvText(text);
     };
     reader.readAsText(file);
   };
 
-  const handleLoadDemoCsv = () => {
-    const syntheticRows: number[][] = [];
-    const syntheticY: number[] = [];
-    for (let i = 0; i < 150; i++) {
-      const inc = 2500 + Math.random() * 6000;
-      const dti = 0.15 + Math.random() * 0.45;
-      const late = Math.random() < 0.8 ? 0 : Math.floor(Math.random() * 3);
-      const util = 0.1 + Math.random() * 0.7;
-      const incVar = 0.1 + Math.random() * 0.4;
-      const lti = 1.0 + Math.random() * 4.0;
-      const hist = 24 + Math.random() * 120;
-      const utilPay = 0.4 + Math.random() * 0.6;
-      const def = (dti > 0.45 || late > 1 || util > 0.65) ? (Math.random() < 0.6 ? 1 : 0) : 0;
-      syntheticRows.push([inc, dti, late, util, incVar, lti, hist, utilPay]);
-      syntheticY.push(def);
-    }
-    setParsedCsvData({ X: syntheticRows, y: syntheticY });
-    setOfficerCsvFile(new File(["demo"], "lender_local_sample.csv", { type: "text/csv" }));
+  // Fetches real sample training data from GET /api/fl/sample-partner (officer only)
+  const handleLoadDemoCsv = async () => {
+    setIsLoadingSamplePartner(true);
+    setOfficerTrainingError(null);
+    setOfficerFailedStep(null);
+    setOfficerHttpStatus(null);
+    setOfficerTechnicalDetails(null);
     setCsvParseError(null);
-    setOfficerTrainingMessage(null);
-    setOfficerTrainingProgress(0);
-  };
-
-  const handleRunOfficerTraining = async () => {
-    if (!parsedCsvData || parsedCsvData.X.length === 0) {
-      setCsvParseError("Please select a valid applicant CSV file first.");
-      return;
-    }
-    setIsOfficerTraining(true);
-    setOfficerTrainingProgress(5);
-    setOfficerTrainingMessage("Fetching global model and feature preprocessor parameters...");
 
     try {
       const authHeaders = getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/fl/sample-partner`, {
+        headers: authHeaders,
+        credentials: "include",
+      });
 
-      // 1. Fetch preprocessor scaling params
-      const prepRes = await fetch(`${API_BASE}/api/fl/preprocessor`, { headers: authHeaders });
-      if (!prepRes.ok) throw new Error("Failed to load preprocessor parameters from coordinator.");
-      const prepData = await prepRes.json();
-
-      setOfficerTrainingProgress(15);
-      // 2. Fetch active global model
-      const modelRes = await fetch(`${API_BASE}/api/fl/global-model`, { headers: authHeaders });
-      if (!modelRes.ok) throw new Error("Failed to fetch active global model parameters.");
-      const globalModelData = await modelRes.json();
-
-      const roundId = globalModelData.round_id || "ROUND-001";
-      const requiredFeatures = [
-        "monthly_income_band_value",
-        "debt_to_income_ratio",
-        "late_payment_count_12m",
-        "credit_utilization_ratio",
-        "income_variability",
-        "loan_amount_to_income",
-        "account_history_months",
-        "utility_payment_consistency",
-      ];
-
-      // 3. Normalize dataset with preprocessor means and stds (client-side)
-      const X_norm = parsedCsvData.X.map((row) =>
-        row.map((val, idx) => {
-          const colName = requiredFeatures[idx];
-          const mean = prepData.means[colName] || 0;
-          const std = prepData.stds[colName] || 1;
-          return (val - mean) / (std < 1e-7 ? 1 : std);
-        })
-      );
-      const y = parsedCsvData.y;
-      const N = X_norm.length;
-
-      setOfficerTrainingProgress(25);
-      setOfficerTrainingMessage(`Running local SGD over ${N} private applicant records...`);
-
-      // 4. Client-side Logistic Regression with optional Differential Privacy
-      let w = [...globalModelData.weights];
-      let b = globalModelData.bias;
-      const lr = 0.04;
-      const epochs = 3;
-      const batchSize = 16;
-      const maxGradNorm = 1.0;
-      const noiseMultiplier = 1.0;
-      let totalSteps = 0;
-
-      // Box-Muller Gaussian sample generator
-      const boxMuller = () => {
-        let u = 0, v = 0;
-        while (u === 0) u = Math.random();
-        while (v === 0) v = Math.random();
-        return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-      };
-
-      for (let epoch = 0; epoch < epochs; epoch++) {
-        const indices = Array.from({ length: N }, (_, i) => i).sort(() => Math.random() - 0.5);
-        for (let i = 0; i < N; i += batchSize) {
-          const batchIndices = indices.slice(i, Math.min(i + batchSize, N));
-          const B = batchIndices.length;
-          const gradW = new Array(8).fill(0);
-          let gradB = 0;
-
-          for (const idx of batchIndices) {
-            const x_i = X_norm[idx];
-            const y_i = y[idx];
-            let z = b;
-            for (let j = 0; j < 8; j++) z += w[j] * x_i[j];
-            const clampZ = Math.max(-20, Math.min(20, z));
-            const p = 1.0 / (1.0 + Math.exp(-clampZ));
-            const err = p - y_i;
-
-            let gw = x_i.map((xj) => xj * err);
-            let gb = err;
-
-            // Per-sample gradient clipping for Differential Privacy
-            if (officerDpEnabled) {
-              const normSq = gw.reduce((acc, v) => acc + v * v, 0) + gb * gb;
-              const norm = Math.sqrt(normSq);
-              const clip = Math.min(1.0, maxGradNorm / Math.max(1e-7, norm));
-              gw = gw.map((v) => v * clip);
-              gb = gb * clip;
-            }
-
-            for (let j = 0; j < 8; j++) gradW[j] += gw[j];
-            gradB += gb;
-          }
-
-          // Average batch gradient
-          for (let j = 0; j < 8; j++) gradW[j] /= B;
-          gradB /= B;
-
-          // Add Gaussian DP noise
-          if (officerDpEnabled) {
-            const sigma = (noiseMultiplier * maxGradNorm) / B;
-            for (let j = 0; j < 8; j++) {
-              gradW[j] += sigma * boxMuller();
-            }
-            gradB += sigma * boxMuller();
-          }
-
-          // Parameter update
-          for (let j = 0; j < 8; j++) {
-            w[j] -= lr * gradW[j];
-          }
-          b -= lr * gradB;
-          totalSteps++;
-        }
-        const prog = Math.min(90, Math.round(25 + ((epoch + 1) / epochs) * 65));
-        setOfficerTrainingProgress(prog);
+      if (!res.ok) {
+        const errDetail = await res.text().catch(() => "");
+        throw {
+          step: "sample-data",
+          status: res.status,
+          userMessage: "Unable to retrieve sample lender data from coordinator.",
+          technical: errDetail || `HTTP ${res.status}`,
+        };
       }
 
-      setOfficerTrainingProgress(100);
-      setOfficerTrainingMessage("Training complete. Learning aage badh rahi hai.");
+      const csvText = await res.text();
+      const success = parseAndSetCsvText(csvText);
+      if (success) {
+        setOfficerCsvFile(new File([csvText], "lender_a_train.csv", { type: "text/csv" }));
+        setOfficerTrainingMessage("Loaded sample lender training partition (1,200 private records). Ready to train.");
+      }
+    } catch (err: any) {
+      setOfficerFailedStep(err.step || "sample-data");
+      setOfficerHttpStatus(err.status || null);
+      setOfficerTrainingError(err.userMessage || "Failed to load sample lender data.");
+      setOfficerTechnicalDetails(err.technical || err.message || "Unknown error");
+    } finally {
+      setIsLoadingSamplePartner(false);
+    }
+  };
 
-      // 5. Submit model updates to central coordinator (NO raw rows!)
-      const updateRes = await fetch(`${API_BASE}/api/fl/update`, {
+  // Step-by-step Officer training pipeline with non-technical messages and Retry
+  const handleRunOfficerTraining = async () => {
+    setIsOfficerTraining(true);
+    setOfficerTrainingProgress(5);
+    setOfficerTrainingError(null);
+    setOfficerFailedStep(null);
+    setOfficerHttpStatus(null);
+    setOfficerTechnicalDetails(null);
+    setOfficerTrainingMessage("Step 1/5: Verifying coordinator service health...");
+
+    // 1. Step: health
+    let healthRes;
+    try {
+      healthRes = await fetch(`${API_BASE}/api/health`, { credentials: "include" });
+    } catch (e: any) {
+      setOfficerFailedStep("health");
+      setOfficerHttpStatus(null);
+      setOfficerTrainingError("The credit risk coordination service is unreachable. Please verify your connection.");
+      setOfficerTechnicalDetails(e.message || "Network error");
+      setIsOfficerTraining(false);
+      return;
+    }
+    if (!healthRes.ok) {
+      setOfficerFailedStep("health");
+      setOfficerHttpStatus(healthRes.status);
+      setOfficerTrainingError("The coordination service is currently unavailable.");
+      setOfficerTechnicalDetails(`HTTP ${healthRes.status}`);
+      setIsOfficerTraining(false);
+      return;
+    }
+
+    // 2. Step: config
+    setOfficerTrainingProgress(20);
+    setOfficerTrainingMessage("Step 2/5: Fetching collaborative round parameters...");
+    let configRes, configData;
+    try {
+      configRes = await fetch(`${API_BASE}/api/fl/config`, {
+        headers: getAuthHeaders(),
+        credentials: "include",
+      });
+    } catch (e: any) {
+      setOfficerFailedStep("config");
+      setOfficerHttpStatus(null);
+      setOfficerTrainingError("Unable to retrieve round configuration from coordinator.");
+      setOfficerTechnicalDetails(e.message || "Network error");
+      setIsOfficerTraining(false);
+      return;
+    }
+    if (!configRes.ok) {
+      const errJson = await configRes.json().catch(() => ({}));
+      setOfficerFailedStep("config");
+      setOfficerHttpStatus(configRes.status);
+      setOfficerTrainingError("Failed to fetch collaborative round settings.");
+      setOfficerTechnicalDetails(errJson.detail || `HTTP ${configRes.status}`);
+      setIsOfficerTraining(false);
+      return;
+    }
+    configData = await configRes.json();
+
+    // 3. Step: sample-data
+    setOfficerTrainingProgress(35);
+    setOfficerTrainingMessage("Step 3/5: Validating private training partition...");
+    if (!parsedCsvData || parsedCsvData.X.length === 0) {
+      setOfficerFailedStep("sample-data");
+      setOfficerHttpStatus(400);
+      setOfficerTrainingError("Applicant training dataset required. Click 'Use Sample Lender Data' or select a CSV.");
+      setOfficerTechnicalDetails("Local dataset partition is empty or unparsed.");
+      setIsOfficerTraining(false);
+      return;
+    }
+
+    // 4. Step: global-model
+    setOfficerTrainingProgress(50);
+    setOfficerTrainingMessage("Step 4/5: Loading active collaborative global model...");
+    let modelRes, globalModelData;
+    try {
+      modelRes = await fetch(`${API_BASE}/api/fl/global-model`, {
+        headers: getAuthHeaders(),
+        credentials: "include",
+      });
+    } catch (e: any) {
+      setOfficerFailedStep("global-model");
+      setOfficerHttpStatus(null);
+      setOfficerTrainingError("Could not retrieve global model weights from coordinator.");
+      setOfficerTechnicalDetails(e.message || "Network error");
+      setIsOfficerTraining(false);
+      return;
+    }
+    if (!modelRes.ok) {
+      const errJson = await modelRes.json().catch(() => ({}));
+      setOfficerFailedStep("global-model");
+      setOfficerHttpStatus(modelRes.status);
+      setOfficerTrainingError("Unable to download the baseline global model.");
+      setOfficerTechnicalDetails(errJson.detail || `HTTP ${modelRes.status}`);
+      setIsOfficerTraining(false);
+      return;
+    }
+    globalModelData = await modelRes.json();
+
+    // 5. Preprocess and train in JS via flTrainer
+    setOfficerTrainingProgress(65);
+    setOfficerTrainingMessage(`Step 5/5: Training locally on ${parsedCsvData.X.length} records in browser...`);
+
+    let trainResult;
+    try {
+      const normalizedX = preprocessRows(parsedCsvData.X, configData.preprocessor);
+      trainResult = trainLogisticRegressionSGD({
+        X: normalizedX,
+        y: parsedCsvData.y,
+        initialWeights: globalModelData.weights,
+        initialBias: globalModelData.bias,
+        learningRate: configData.learning_rate || 0.02,
+        epochs: configData.local_epochs || 3,
+        batchSize: 16,
+        onProgress: (p) => setOfficerTrainingProgress(Math.min(90, 65 + Math.round(p * 0.25))),
+      });
+    } catch (err: any) {
+      setOfficerFailedStep("training");
+      setOfficerHttpStatus(null);
+      setOfficerTrainingError("Local browser training encountered an internal numeric error.");
+      setOfficerTechnicalDetails(err.message || "Training calculation error");
+      setIsOfficerTraining(false);
+      return;
+    }
+
+    // 6. Submit update to POST /api/fl/update (strictly round_id, lender_id, weights, bias, num_samples, steps)
+    setOfficerTrainingProgress(92);
+    setOfficerTrainingMessage("Submitting locally trained model update...");
+
+    let updateRes;
+    try {
+      updateRes = await fetch(`${API_BASE}/api/fl/update`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...authHeaders,
+          ...getAuthHeaders(),
         },
+        credentials: "include",
         body: JSON.stringify({
-          round_id: roundId,
+          round_id: configData.round_id,
           lender_id: selectedLender || "lender_a",
-          weights: w,
-          bias: b,
-          num_samples: N,
-          steps: totalSteps,
-          dp_enabled: officerDpEnabled,
+          weights: trainResult.weights,
+          bias: trainResult.bias,
+          num_samples: trainResult.num_samples,
+          steps: trainResult.steps,
         }),
       });
-
-      if (updateRes.ok) {
-        const updateData = await updateRes.json();
-        setInAppNotice(
-          `Update received by coordinator for ${roundId}! Candidate model generated with AUROC: ${updateData.metrics?.roc_auc || "0.882"}.`
-        );
-      } else if (updateRes.status === 409) {
-        setOfficerTrainingMessage("Officer update already submitted for this round (HTTP 409).");
-        setInAppNotice(`Round ${roundId}: Officer has already submitted for this collaborative cycle.`);
-      } else {
-        const errJson = await updateRes.json().catch(() => ({}));
-        setOfficerTrainingMessage(errJson.detail || "Coordinator rejected update.");
-      }
-    } catch (err: any) {
-      setOfficerTrainingMessage(`Training failed: ${err.message}`);
-    } finally {
+    } catch (e: any) {
+      setOfficerFailedStep("update");
+      setOfficerHttpStatus(null);
+      setOfficerTrainingError("Coordinator did not receive the model update. Please check connection.");
+      setOfficerTechnicalDetails(e.message || "Network error");
       setIsOfficerTraining(false);
+      return;
     }
+
+    if (!updateRes.ok) {
+      const errJson = await updateRes.json().catch(() => ({}));
+      if (updateRes.status === 409) {
+        setOfficerTrainingProgress(100);
+        setOfficerTrainingMessage(`Officer update already submitted for round ${configData.round_id} (HTTP 409).`);
+        setInAppNotice(`Round ${configData.round_id}: You have already submitted updates for this round.`);
+      } else {
+        setOfficerFailedStep("update");
+        setOfficerHttpStatus(updateRes.status);
+        setOfficerTrainingError("The coordinator rejected the model update submission.");
+        setOfficerTechnicalDetails(errJson.detail || `HTTP ${updateRes.status}`);
+      }
+      setIsOfficerTraining(false);
+      return;
+    }
+
+    setOfficerTrainingProgress(100);
+    setOfficerTrainingMessage("Training complete. Update sent. Waiting for other lenders to finish this round.");
+    setInAppNotice("Local training complete. Model update successfully sent to coordinator.");
+    setIsOfficerTraining(false);
   };
 
   const handleRunServerSimulation = async () => {
@@ -2489,9 +2536,10 @@ export default function FedCreditXDashboard() {
                         <button
                           type="button"
                           onClick={handleLoadDemoCsv}
-                          className="px-3.5 py-2 rounded-xl border border-[#E8ECE9] text-xs font-semibold text-[#123F36] hover:bg-[#F7F8F7] transition cursor-pointer"
+                          disabled={isLoadingSamplePartner || isOfficerTraining}
+                          className="px-3.5 py-2 rounded-xl border border-[#E8ECE9] text-xs font-semibold text-[#123F36] hover:bg-[#F7F8F7] disabled:opacity-50 transition cursor-pointer"
                         >
-                          Use Sample Lender Data
+                          {isLoadingSamplePartner ? "Loading Sample Data..." : "Use Sample Lender Data"}
                         </button>
                         <button
                           type="button"
@@ -2505,7 +2553,7 @@ export default function FedCreditXDashboard() {
                     </div>
 
                     {/* CSV Picker and Controls */}
-                    <div className="p-4 rounded-2xl bg-[#F7F8F7] border border-[#E8ECE9] space-y-4">
+                    <div className="p-4 rounded-2xl bg-[#F7F8F7] border border-[#E8ECE9] space-y-3">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div className="space-y-1">
                           <label className="text-xs font-bold text-[#111713]">Select Applicant Training CSV</label>
@@ -2521,30 +2569,57 @@ export default function FedCreditXDashboard() {
                         />
                       </div>
 
-                      {/* DP Toggle */}
-                      <div className="flex items-center justify-between pt-2 border-t border-[#E8ECE9]">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            id="officer-dp-toggle"
-                            checked={officerDpEnabled}
-                            onChange={(e) => setOfficerDpEnabled(e.target.checked)}
-                            className="rounded border-[#C5E4D1] text-[#123F36] focus:ring-[#123F36] cursor-pointer"
-                          />
-                          <label htmlFor="officer-dp-toggle" className="text-xs font-semibold text-[#111713] cursor-pointer">
-                            Enable Differential Privacy (Opacus-calibrated Gaussian Noise)
-                          </label>
+                      {/* Note: Browser Differential Privacy (DP-SGD with Opacus client accounting) is future work */}
+                      {parsedCsvData && (
+                        <div className="text-[11px] text-[#123F36] font-mono font-semibold pt-1 border-t border-[#E8ECE9]">
+                          ✓ {parsedCsvData.X.length} applicant records loaded for local training
                         </div>
-                        <span className="text-[11px] text-[#758079] font-mono">
-                          {parsedCsvData ? `${parsedCsvData.X.length} records loaded` : "No file loaded"}
-                        </span>
-                      </div>
+                      )}
                     </div>
 
                     {/* CSV Error */}
                     {csvParseError && (
                       <div className="p-3.5 rounded-2xl bg-[#FEF2F2] border border-[#FCA5A5] text-xs font-bold text-[#CF5555]">
                         {csvParseError}
+                      </div>
+                    )}
+
+                    {/* Officer Training Error with Retry and Auditor Diagnostics */}
+                    {officerTrainingError && (
+                      <div className="p-4 rounded-2xl bg-[#FEF2F2] border border-[#FCA5A5] text-xs space-y-2.5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <span className="font-bold text-[#CF5555]">
+                            {officerTrainingError}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleRunOfficerTraining}
+                            disabled={isOfficerTraining}
+                            className="px-3.5 py-1.5 bg-[#CF5555] text-white rounded-xl font-bold text-xs hover:bg-[#b04040] transition cursor-pointer whitespace-nowrap self-start sm:self-auto"
+                          >
+                            Retry Training
+                          </button>
+                        </div>
+
+                        {/* Technical Diagnostics visible strictly to Auditor */}
+                        {isAuditorOrAdmin && (
+                          <div className="pt-2 border-t border-[#FCA5A5]/40 text-[11px]">
+                            <button
+                              type="button"
+                              onClick={() => setShowOfficerAuditorDetails(!showOfficerAuditorDetails)}
+                              className="font-bold text-[#991B1B] underline cursor-pointer"
+                            >
+                              {showOfficerAuditorDetails ? "Hide Auditor Diagnostics" : "View Auditor Diagnostics"}
+                            </button>
+                            {showOfficerAuditorDetails && (
+                              <div className="mt-1.5 p-2.5 rounded-xl bg-white/80 font-mono text-[10px] text-[#991B1B] space-y-0.5 border border-[#FCA5A5]/30">
+                                <div>Failed Step: <strong>{officerFailedStep || "unknown"}</strong></div>
+                                <div>HTTP Status: <strong>{officerHttpStatus !== null ? officerHttpStatus : "N/A"}</strong></div>
+                                <div>Diagnostics: {officerTechnicalDetails || "No further details"}</div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -2565,7 +2640,7 @@ export default function FedCreditXDashboard() {
                     )}
 
                     {/* Training Result / Status Message */}
-                    {officerTrainingMessage && (
+                    {officerTrainingMessage && !officerTrainingError && (
                       <div className="p-3.5 rounded-2xl bg-[#E7F3EB] border border-[#C5E4D1] text-xs font-mono text-[#123F36] font-bold">
                         {officerTrainingMessage}
                       </div>
