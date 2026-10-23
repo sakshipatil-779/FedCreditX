@@ -2,57 +2,94 @@
 
 ## Architecture on Render
 
-FedCreditX is deployed on Render as two connected web services defined in `render.yaml`:
-1. **`fedcreditx-api`**: FastAPI Python backend running Uvicorn.
-2. **`fedcreditx-ui`**: Next.js React frontend deployed on Node 20.
+FedCreditX is deployed on Render as two connected services defined in `render.yaml`:
+1. **`fedcreditx-api`**: FastAPI Python backend running Uvicorn (`runtime: python`).
+2. **`fedcreditx` (or `fedcreditx-ui`)**: Next.js React frontend running as a **Next.js Node service** (`runtime: node`, `next start`).
+
+> [!NOTE]
+> **Next.js Node Service Architecture vs Static Export:**
+> The frontend is **NOT a static export**. It runs as a dynamic Node.js service using `next start`.
+> Same-origin API routing is achieved via Next.js `rewrites()` in `frontend/next.config.ts`:
+> ```typescript
+> async rewrites() {
+>   const backendUrl = process.env.BACKEND_URL || "https://fedcreditx-api.onrender.com";
+>   return [
+>     {
+>       source: "/api/:path*",
+>       destination: `${backendUrl}/api/:path*`,
+>     },
+>   ];
+> }
+> ```
+> This proxies all browser requests sent to `https://fedcreditx.onrender.com/api/*` to the FastAPI backend at `https://fedcreditx-api.onrender.com/api/*`.
+> As a result, the `session_token` cookie is treated as a **first-party cookie** on `fedcreditx.onrender.com`, completely bypassing third-party cookie blocking in modern browsers (Safari, Chrome, Firefox).
 
 ---
 
-## Free-Tier Memory Advisory (Important)
+## Deploy Traceability & Commit Verification
 
-> [!WARNING]
-> **Render Free Tier RAM Limitation (512 MB):**
-> Render's free tier provides approximately **512 MB of RAM**.
-> In full multi-process gRPC mode (`--mode grpc`), Flower launches **1 coordinator server process** plus **3 independent client processes** (one for each simulated lender), along with PyTorch and Opacus runtime overhead.
->
-> Spawning four simultaneous Python processes with PyTorch and gRPC channels may exceed the 512 MB RAM limit, triggering an Out-Of-Memory (`out_of_memory`) process kill or 502 gateway error.
+Every deployment can be verified through the public health endpoint:
+```bash
+curl.exe -i https://fedcreditx-api.onrender.com/api/health
+```
 
-### Recommendations:
-1. **Production / Demonstrations:**
-   - Run the multi-process gRPC orchestration (`run_genuine_flower_grpc`) on a machine with **at least 2 GB RAM**, or upgrade the Render web service instance to **Starter (1 GB) or Standard (2 GB)**.
-2. **Resource-Constrained Environments (512 MB):**
-   - Use the browser-side edge training workflow (**"Train on my data"**), where local SGD and gradient updates execute entirely in the user's browser, transmitting only compressed weight vectors to the backend.
-   - For server-side demonstrations on 512 MB instances, reduce concurrent clients (`--min-clients 1` or `--min-clients 2`), or use the in-memory federated simulation mode (`run_federated_simulation`).
+The response includes:
+- `ok`: boolean status indicator (`true`)
+- `service`: service identifier (`fedcreditx-api`)
+- `version`: backend application version (`0.2.0`)
+- `git_commit`: git commit SHA injected automatically by Render (`RENDER_GIT_COMMIT`), or `"unknown"` in local development
+- `fl_routes_loaded`: list of registered Federated Learning endpoint paths:
+  - `/api/fl/config`
+  - `/api/fl/rounds`
+  - `/api/fl/sample-partner`
+  - `/api/fl/update`
+  - `/api/fl/model`
+  - `/api/fl/preprocessor`
+
+### Post-Push Verification Step
+After every `git push origin main`:
+1. Check the local commit hash:
+   ```bash
+   git rev-parse HEAD
+   ```
+2. Call `/api/health` and verify `git_commit`:
+   ```bash
+   curl.exe -s https://fedcreditx-api.onrender.com/api/health | jq .git_commit
+   ```
+3. Once the Render deploy finishes, `git_commit` will match the latest GitHub commit SHA, guaranteeing that the running build includes the latest code.
 
 ---
 
 ## Environment Variables Configuration
 
-Set these environment variables on the Render Dashboard:
+Configure these environment variables on the Render Dashboard:
 
-### 1. `fedcreditx-api` (Backend)
+### 1. `fedcreditx-api` (FastAPI Backend)
+| Variable | Default / Recommended | Description |
+| :--- | :--- | :--- |
+| `ALLOWED_ORIGINS` | `https://fedcreditx.onrender.com,http://localhost:3000` | Comma-separated list of permitted CORS origins (strict, no wildcard with credentials) |
+| `MAX_UPDATE_NORM` | `15.0` | Maximum allowable L2 norm bound for client parameter updates `\\|w - w_{global}\\|_2` |
+| `FL_MIN_CLIENTS` | `3` | Minimum updates required in an open round before triggering weighted FedAvg aggregation |
+| `DEMO_AUDITOR_ENABLED` | `true` | Allows evaluator demo-auditor login via email/password |
+| `DEMO_AUDITOR_EMAIL` | `fedcreditx@hackfront.com` | Demo auditor authorized email |
+| `DEMO_AUDITOR_PASSWORD_HASH` | *(Salted bcrypt hash)* | Hashed password for demo auditor |
+| `AUDITOR_EMAILS` | `auditor@fedcreditx.org,fedcreditx@hackfront.com` | Google sign-in auditor email allowlist |
+
+### 2. `fedcreditx` (Next.js Frontend)
 | Variable | Value | Description |
 | :--- | :--- | :--- |
-| `PORT` | `8000` | Port assigned by Render |
-| `AUDITOR_EMAILS` | `your.email@gmail.com,auditor@fedcreditx.com,compliance@fedcreditx.com` | Comma-separated allowlist of Google accounts authorized for Auditor role |
-| `OFFICER_EMAILS` | *(Optional)* | Comma-separated allowlist of Google accounts authorized for Officer role (default: all authenticated Google users) |
-
-### 2. `fedcreditx-ui` (Frontend)
-| Variable | Value | Description |
-| :--- | :--- | :--- |
+| `BACKEND_URL` | `https://fedcreditx-api.onrender.com` | Backend URL used by Next.js `rewrites()` proxy |
+| `NODE_VERSION` | `20.20.2` | Node.js engine version |
 | `PORT` | `3000` | Port assigned by Render |
-| `NODE_VERSION` | `20.20.2` | Node.js runtime version |
-| `NEXT_PUBLIC_API_URL` | `https://fedcreditx-api.onrender.com` | Live backend URL pointing to `fedcreditx-api` |
 
 ---
 
-## Manual Sync & Deployment Steps
+## Session Cookie Configuration
 
-1. Push latest commits to the `main` branch:
-   ```bash
-   git push origin main
-   ```
-2. In the Render Dashboard:
-   - Navigate to **`fedcreditx-api`** → click **Manual Deploy** → **Deploy latest commit**.
-   - Navigate to **`fedcreditx-ui`** → click **Manual Deploy** → **Clear build cache & deploy**.
-3. Verify backend health at `https://fedcreditx-api.onrender.com/api/overview` or `/health`.
+The session cookie (`session_token`) is set on successful authentication with the following attributes:
+- `HttpOnly`: Prevents client-side script access (mitigating XSS extraction)
+- `Secure`: Transmitted only over HTTPS connections
+- `SameSite=Lax`: Defends against CSRF while allowing top-level cross-site navigations
+- `Path=/`: Valid across all application routes
+
+Because browser requests target the same-origin relative path (`/api/*`), Next.js proxies forward the `Cookie` header upstream to FastAPI and pass `Set-Cookie` headers back to the browser.
