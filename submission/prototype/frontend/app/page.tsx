@@ -26,6 +26,7 @@ import { useHighlightOnArrive } from "./hooks/useHighlightOnArrive";
 import {
   getCurrentUser,
   signOutUser,
+  signInWithEmailPassword,
   FirebaseUser,
 } from "./lib/firebase";
 
@@ -368,8 +369,21 @@ export default function FedCreditXDashboard() {
   }): Promise<{ success: boolean; error?: string }> => {
     const { email, password, displayName, role } = payload;
 
-    // Check demo login if risk_auditor and password entered
-    if (role === "risk_auditor" && password && password.trim()) {
+    // 1. If password provided, attempt Firebase email & password authentication first
+    let verifiedIdToken: string | null = null;
+    if (password && password.trim()) {
+      try {
+        const fbUser = await signInWithEmailPassword(email, password);
+        if (fbUser && fbUser.idToken) {
+          verifiedIdToken = fbUser.idToken;
+        }
+      } catch {
+        // Fall through to demo-login / backend allowlist verification
+      }
+    }
+
+    // 2. Check demo login if risk_auditor and password entered (and not already authenticated via Firebase)
+    if (!verifiedIdToken && role === "risk_auditor" && password && password.trim()) {
       try {
         const demoRes = await fetch(`${API_BASE}/api/auth/demo-login`, {
           method: "POST",
@@ -408,9 +422,9 @@ export default function FedCreditXDashboard() {
       }
     }
 
-    // Direct role selection with backend /api/auth/select-role
+    // 3. Direct role selection with backend /api/auth/select-role
     try {
-      const token = `test_tok:${email}`;
+      const token = verifiedIdToken || `test_tok:${email}`;
       const res = await fetch(`${API_BASE}/api/auth/select-role`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
