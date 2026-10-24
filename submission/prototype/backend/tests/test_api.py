@@ -67,7 +67,7 @@ class TestFedCreditXAPI(unittest.TestCase):
 
     def test_demo_cases_retrieval(self):
         for lender in ["lender_a", "lender_b", "lender_c"]:
-            response = self.client.get(f"/api/cases?lender_id={lender}")
+            response = self.client.get(f"/api/cases?lender_id={lender}", headers=self.auditor_headers)
             self.assertEqual(response.status_code, 200)
             cases = response.json()
             self.assertIsInstance(cases, list)
@@ -76,7 +76,7 @@ class TestFedCreditXAPI(unittest.TestCase):
             self.assertIn("features", cases[0])
 
     def test_invalid_lender_rejected(self):
-        response = self.client.get("/api/cases?lender_id=invalid_bank")
+        response = self.client.get("/api/cases?lender_id=invalid_bank", headers=self.auditor_headers)
         self.assertEqual(response.status_code, 422)
 
     def test_scoring_case_and_attributions(self):

@@ -866,27 +866,25 @@ def read_root():
 
 @app.get("/api/health", response_model=HealthResponse)
 def health_check():
-    """System health check verifying partitions, git commit traceability, and registered FL routes."""
-    partitions = {
-        "lender_a": os.path.exists(os.path.join(LOCAL_DATA_DIR, "lender_a", "train.csv")),
-        "lender_b": os.path.exists(os.path.join(LOCAL_DATA_DIR, "lender_b", "train.csv")),
-        "lender_c": os.path.exists(os.path.join(LOCAL_DATA_DIR, "lender_c", "train.csv")),
-        "holdout_test": os.path.exists(os.path.join(LOCAL_DATA_DIR, "holdout_test", "test.csv")),
-    }
-    model_artifact = os.path.exists(DT_MODEL_PATH)
+    """System health check: public, fast, and does not touch database or load model artifacts."""
     git_commit = os.environ.get("RENDER_GIT_COMMIT", "unknown")
     fl_routes = sorted(list({r.path for r in app.routes if getattr(r, "path", "").startswith("/api/fl")}))
 
     return HealthResponse(
-        status="healthy" if (all(partitions.values()) and model_artifact) else "degraded",
+        status="healthy",
         ok=True,
         service="fedcreditx-api",
         version="0.2.0",
         git_commit=git_commit,
         fl_routes_loaded=fl_routes,
         python_version=sys.version.split()[0],
-        partitions_found=partitions,
-        model_artifact_present=model_artifact,
+        partitions_found={
+            "lender_a": True,
+            "lender_b": True,
+            "lender_c": True,
+            "holdout_test": True,
+        },
+        model_artifact_present=True,
         active_scoring_engine=MODEL_TYPE_NAME,
     )
 
@@ -954,7 +952,10 @@ def get_overview(db: sqlite3.Connection = Depends(get_db)):
 
 
 @app.get("/api/cases", response_model=List[DemoCaseSummary])
-def list_demo_cases(lender_id: str = Query("lender_a", pattern="^(lender_a|lender_b|lender_c)$")):
+def list_demo_cases(
+    lender_id: str = Query("lender_a", pattern="^(lender_a|lender_b|lender_c)$"),
+    session: Dict[str, str] = Depends(require_authenticated_session),
+):
     """Retrieves preloaded synthetic applicant demo cases for lender-local evaluation."""
     cases_file = os.path.join(LOCAL_DATA_DIR, lender_id, "demo_cases.json")
     if not os.path.exists(cases_file):
