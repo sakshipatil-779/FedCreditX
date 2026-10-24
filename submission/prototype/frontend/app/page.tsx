@@ -30,6 +30,12 @@ import {
   FirebaseUser,
 } from "./lib/firebase";
 import { preprocessRows, trainLogisticRegressionSGD } from "./lib/flTrainer";
+import {
+  apiFetch,
+  checkHealthWithRetry,
+  getOfficerErrorMessage,
+  ApiError,
+} from "./lib/api";
 
 type PrimaryScreen = "decision" | "approvals" | "audit" | "research" | "metrics" | "about";
 
@@ -127,6 +133,71 @@ interface ApprovalItem {
 
 const API_BASE = "";
 
+function ErrorBanner({
+  error,
+  userRole,
+  onRetry,
+}: {
+  error: ApiError | string | null;
+  userRole?: string;
+  onRetry?: () => void;
+}) {
+  if (!error) return null;
+  const isAuditor = userRole === "risk_auditor";
+  const isApiError = typeof error !== "string" && error !== null;
+
+  let officerMessage = "The server is waking up. Retry in a few seconds.";
+  if (isApiError) {
+    officerMessage = getOfficerErrorMessage((error as ApiError).kind);
+  } else if (typeof error === "string") {
+    if (
+      error.includes("<") ||
+      error.includes("JSON") ||
+      error.includes("Unexpected token") ||
+      error.includes("Network error") ||
+      error.includes("Failed to fetch")
+    ) {
+      officerMessage = "The server is waking up. Retry in a few seconds.";
+    } else {
+      officerMessage = error;
+    }
+  }
+
+  return (
+    <div className="p-3.5 rounded-2xl bg-[#FEF2F2] border border-[#FCA5A5] text-xs space-y-2 my-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[#CF5555] font-semibold">
+          <IconAlert className="w-4 h-4 shrink-0 text-[#CF5555]" />
+          <span>{officerMessage}</span>
+        </div>
+        {onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="px-3.5 py-1.5 bg-[#CF5555] text-white rounded-xl font-bold text-xs hover:bg-[#b04040] transition cursor-pointer whitespace-nowrap self-start sm:self-auto"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+
+      {isAuditor && isApiError && (
+        <details className="pt-2 border-t border-[#FCA5A5]/40 text-[11px] text-[#991B1B]">
+          <summary className="font-bold underline cursor-pointer select-none">Details</summary>
+          <div className="mt-1.5 p-2.5 rounded-xl bg-white/80 font-mono text-[10px] space-y-0.5 border border-[#FCA5A5]/30">
+            <div>Kind: <strong>{(error as ApiError).kind}</strong></div>
+            <div>HTTP Status: <strong>{(error as ApiError).status ?? "N/A"}</strong></div>
+            <div>Endpoint: <strong>{(error as ApiError).endpoint}</strong></div>
+            {(error as ApiError).details && (
+              <div className="break-all whitespace-pre-wrap">Details: {(error as ApiError).details}</div>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export default function FedCreditXDashboard() {
   // 1. Authentication State
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
@@ -165,12 +236,14 @@ export default function FedCreditXDashboard() {
   const [cases, setCases] = useState<CaseItem[]>([]);
   const [casesLoading, setCasesLoading] = useState<boolean>(true);
   const [casesError, setCasesError] = useState<string | null>(null);
+  const [casesErrorObj, setCasesErrorObj] = useState<ApiError | null>(null);
   const [selectedCaseId, setSelectedCaseId] = useState<string>("");
 
   // 4. Decision Screen & Scoring State
   const [isScoring, setIsScoring] = useState<boolean>(false);
   const [scoredResult, setScoredResult] = useState<ScoringResponse | null>(null);
   const [scoreError, setScoreError] = useState<string | null>(null);
+  const [scoreErrorObj, setScoreErrorObj] = useState<ApiError | null>(null);
 
   // 5. Officer Action & Mandatory Override State
   const [overrideReason, setOverrideReason] = useState<string>("");
@@ -178,6 +251,13 @@ export default function FedCreditXDashboard() {
   const [actionSubmitting, setActionSubmitting] = useState<boolean>(false);
   const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null);
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null);
+  const [actionErrorObj, setActionErrorObj] = useState<ApiError | null>(null);
+
+  // Cold Start & Wake Up State (Part B)
+  const [isServerWakingUp, setIsServerWakingUp] = useState<boolean>(false);
+  const [wakeUpAttempt, setWakeUpAttempt] = useState<number>(0);
+  const [wakeUpTotal, setWakeUpTotal] = useState<number>(3);
+  const [serverReady, setServerReady] = useState<boolean>(false);
 
   // 6. Approval Tracking State
   const [approvalsList, setApprovalsList] = useState<ApprovalItem[]>([]);
@@ -247,12 +327,45 @@ export default function FedCreditXDashboard() {
     }
   }, [inAppNotice]);
 
-  // Check auth on mount
+  // Check auth and verify backend readiness with 3 attempts on app load (Part B.4)
   useEffect(() => {
     const user = getCurrentUser();
     setCurrentUser(user);
     setAuthInitialized(true);
-    checkBackendHealth();
+
+    let isMounted = true;
+    setIsServerWakingUp(true);
+
+    checkHealthWithRetry(3, 3000, (attempt, max) => {
+      if (isMounted) {
+        setWakeUpAttempt(attempt);
+        setWakeUpTotal(max);
+      }
+    }).then((res) => {
+      if (!isMounted) return;
+      setIsServerWakingUp(false);
+      if (res.ok) {
+        setServerReady(true);
+        setApiConnected(true);
+      } else {
+        setApiConnected(false);
+        const errObj: ApiError = res.error || {
+          kind: "proxy_unavailable",
+          status: res.status,
+          endpoint: "/api/health",
+          message: "The server is waking up.",
+          details: "Health check retry exhausted (3 attempts).",
+          isOfficerSafe: true,
+          officerMessage: getOfficerErrorMessage("proxy_unavailable"),
+        };
+        setCasesErrorObj(errObj);
+        setCasesError(getOfficerErrorMessage(errObj.kind));
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Close search dropdown on click outside
@@ -273,20 +386,21 @@ export default function FedCreditXDashboard() {
     }
   }, [currentUser, activeScreen]);
 
-  // When selected lender changes, reload real cases from backend
+  // When selected lender changes or server becomes ready, reload real cases from backend
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && serverReady) {
       loadCases(selectedLender);
       setScoredResult(null);
       setActionSuccessMessage(null);
       setActionErrorMessage(null);
+      setActionErrorObj(null);
       setOverrideReason("");
     }
-  }, [selectedLender, currentUser]);
+  }, [selectedLender, currentUser, serverReady]);
 
   // When switching screens
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && serverReady) {
       if (activeScreen === "approvals") {
         fetchApprovals();
       } else if (activeScreen === "audit") {
@@ -297,7 +411,7 @@ export default function FedCreditXDashboard() {
         checkBackendHealth();
       }
     }
-  }, [activeScreen, auditPage, auditLimit, filterEventType, filterActor, filterResourceId, filterDecision, approvalFilterStatus, currentUser]);
+  }, [activeScreen, auditPage, auditLimit, filterEventType, filterActor, filterResourceId, filterDecision, approvalFilterStatus, currentUser, serverReady]);
 
   const handleSignOut = () => {
     signOutUser();
@@ -487,12 +601,8 @@ export default function FedCreditXDashboard() {
 
   const checkBackendHealth = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/overview`);
-      if (res.ok) {
-        setApiConnected(true);
-      } else {
-        setApiConnected(false);
-      }
+      const res = await apiFetch("/api/health");
+      setApiConnected(res.ok);
     } catch {
       setApiConnected(false);
     }
@@ -523,24 +633,53 @@ export default function FedCreditXDashboard() {
   const loadCases = async (lender: string) => {
     setCasesLoading(true);
     setCasesError(null);
+    setCasesErrorObj(null);
     try {
-      const res = await fetch(`${API_BASE}/api/cases?lender_id=${lender}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setCases(data);
-          setSelectedCaseId(data[0].case_id);
+      const res = await apiFetch<CaseItem[]>(`/api/cases?lender_id=${encodeURIComponent(lender)}`);
+      if (res.ok && res.data) {
+        if (Array.isArray(res.data) && res.data.length > 0) {
+          setCases(res.data);
+          setSelectedCaseId(res.data[0].case_id);
           setCasesLoading(false);
           return;
         } else {
-          setCasesError(`No cases found in backend partition for ${lender}.`);
+          const emptyErr: ApiError = {
+            kind: "server_error",
+            status: res.status,
+            endpoint: `/api/cases?lender_id=${lender}`,
+            message: `No cases found in backend partition for ${lender}.`,
+            details: `Partition for ${lender} returned empty array.`,
+            isOfficerSafe: true,
+            officerMessage: `No cases found in backend partition for ${lender}.`,
+          };
+          setCasesErrorObj(emptyErr);
+          setCasesError(emptyErr.officerMessage);
         }
       } else {
-        const err = await res.json();
-        setCasesError(err.detail || `Failed to fetch cases for ${lender}.`);
+        const errObj = res.error || {
+          kind: "server_error" as const,
+          status: res.status,
+          endpoint: `/api/cases?lender_id=${lender}`,
+          message: `Failed to fetch cases for ${lender}.`,
+          details: `HTTP ${res.status}`,
+          isOfficerSafe: true,
+          officerMessage: getOfficerErrorMessage("server_error"),
+        };
+        setCasesErrorObj(errObj);
+        setCasesError(getOfficerErrorMessage(errObj.kind));
       }
     } catch (e: any) {
-      setCasesError(`Network error connecting to backend API: ${e.message}`);
+      const errObj: ApiError = {
+        kind: "network",
+        endpoint: `/api/cases?lender_id=${lender}`,
+        status: 0,
+        message: "Network error",
+        details: e.message || String(e),
+        isOfficerSafe: true,
+        officerMessage: getOfficerErrorMessage("network"),
+      };
+      setCasesErrorObj(errObj);
+      setCasesError(getOfficerErrorMessage("network"));
     }
     setCasesLoading(false);
   };
@@ -550,12 +689,11 @@ export default function FedCreditXDashboard() {
     setApprovalsLoading(true);
     try {
       const url = approvalFilterStatus === "all"
-        ? `${API_BASE}/api/approvals`
-        : `${API_BASE}/api/approvals?status=${encodeURIComponent(approvalFilterStatus)}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        setApprovalsList(data.approvals || []);
+        ? `/api/approvals`
+        : `/api/approvals?status=${encodeURIComponent(approvalFilterStatus)}`;
+      const res = await apiFetch<{ approvals: ApprovalItem[] }>(url);
+      if (res.ok && res.data) {
+        setApprovalsList(res.data.approvals || []);
       }
     } catch {
       // ignore
@@ -567,19 +705,9 @@ export default function FedCreditXDashboard() {
   // Fetch holdout benchmark metrics with RBAC
   const fetchMetrics = async () => {
     try {
-      const userRole = currentUser?.role || "bank_officer";
-      const sessionToken = typeof window !== "undefined" ? localStorage.getItem("fedcreditx_session_token") : null;
-      const headers: Record<string, string> = { "X-User-Role": userRole };
-      if (sessionToken) {
-        headers["Authorization"] = `Bearer ${sessionToken}`;
-        headers["X-Session-Token"] = sessionToken;
-      }
-      const res = await fetch(`${API_BASE}/api/metrics`, {
-        headers,
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setMetricsData(data);
+      const res = await apiFetch("/api/metrics");
+      if (res.ok && res.data) {
+        setMetricsData(res.data);
       } else if (res.status === 403) {
         setMetricsData({
           access_denied: true,
@@ -603,17 +731,9 @@ export default function FedCreditXDashboard() {
       if (filterResourceId) params.append("resource_id", filterResourceId);
       if (filterDecision) params.append("decision", filterDecision);
 
-      const sessionToken = typeof window !== "undefined" ? localStorage.getItem("fedcreditx_session_token") : null;
-      const headers: Record<string, string> = {};
-      if (sessionToken) {
-        headers["Authorization"] = `Bearer ${sessionToken}`;
-        headers["X-Session-Token"] = sessionToken;
-      }
-
-      const res = await fetch(`${API_BASE}/api/audit?${params.toString()}`, { headers });
-      if (res.ok) {
-        const data = await res.json();
-        setAuditEvents(data);
+      const res = await apiFetch<AuditRecord[]>(`/api/audit?${params.toString()}`);
+      if (res.ok && res.data) {
+        setAuditEvents(res.data);
       }
     } catch {
       // ignore
@@ -633,7 +753,7 @@ export default function FedCreditXDashboard() {
       params.append("session_token", sessionToken);
     }
 
-    window.open(`${API_BASE}/api/audit/export?${params.toString()}`, "_blank");
+    window.open(`/api/audit/export?${params.toString()}`, "_blank");
   };
 
   // Operational Search Handler calling backend /api/search?q=...
@@ -647,10 +767,11 @@ export default function FedCreditXDashboard() {
     setSearchLoading(true);
     setSearchOpen(true);
     try {
-      const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(val.trim())}`);
-      if (res.ok) {
-        const data = await res.json();
-        setSearchResults(data);
+      const res = await apiFetch<{ cases: any[]; audit_events: any[] }>(
+        `/api/search?q=${encodeURIComponent(val.trim())}`
+      );
+      if (res.ok && res.data) {
+        setSearchResults(res.data);
       }
     } catch {
       // ignore
@@ -679,25 +800,47 @@ export default function FedCreditXDashboard() {
     if (!selectedCaseId) return;
     setIsScoring(true);
     setScoreError(null);
+    setScoreErrorObj(null);
     setActionSuccessMessage(null);
     setActionErrorMessage(null);
+    setActionErrorObj(null);
     setOverrideReason("");
 
     try {
-      const res = await fetch(`${API_BASE}/api/cases/${selectedCaseId}/score?lender_id=${selectedLender}`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        const data: ScoringResponse = await res.json();
-        setScoredResult(data);
+      const res = await apiFetch<ScoringResponse>(
+        `/api/cases/${selectedCaseId}/score?lender_id=${selectedLender}`,
+        {
+          method: "POST",
+        }
+      );
+      if (res.ok && res.data) {
+        setScoredResult(res.data);
         setIsScoring(false);
         return;
       } else {
-        const err = await res.json();
-        setScoreError(err.detail || "Scoring request failed.");
+        const errObj = res.error || {
+          kind: "server_error" as const,
+          status: res.status,
+          endpoint: `/api/cases/${selectedCaseId}/score`,
+          message: "Scoring request failed.",
+          isOfficerSafe: true,
+          officerMessage: getOfficerErrorMessage("server_error"),
+        };
+        setScoreErrorObj(errObj);
+        setScoreError(getOfficerErrorMessage(errObj.kind));
       }
     } catch (e: any) {
-      setScoreError(`Network connection error: ${e.message}`);
+      const errObj: ApiError = {
+        kind: "network",
+        status: 0,
+        endpoint: `/api/cases/${selectedCaseId}/score`,
+        message: "Network error",
+        details: e.message || String(e),
+        isOfficerSafe: true,
+        officerMessage: getOfficerErrorMessage("network"),
+      };
+      setScoreErrorObj(errObj);
+      setScoreError(getOfficerErrorMessage("network"));
     }
     setIsScoring(false);
   };
@@ -708,6 +851,7 @@ export default function FedCreditXDashboard() {
     setActionSubmitting(true);
     setActionSuccessMessage(null);
     setActionErrorMessage(null);
+    setActionErrorObj(null);
 
     const rec = scoredResult.system_recommendation;
     let isOverride = false;
@@ -730,29 +874,50 @@ export default function FedCreditXDashboard() {
       : (currentUser?.email || "officer@fedcreditx.com");
 
     try {
-      const res = await fetch(`${API_BASE}/api/cases/${selectedCaseId}/decision?lender_id=${selectedLender}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          officer_action: action,
-          officer_id: currentOfficer,
-          override_reason: overrideReason.trim() || undefined,
-          notes: officerNotes.trim() || undefined,
-        }),
-      });
+      const res = await apiFetch(
+        `/api/cases/${selectedCaseId}/decision?lender_id=${selectedLender}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            officer_action: action,
+            officer_id: currentOfficer,
+            override_reason: overrideReason.trim() || undefined,
+            notes: officerNotes.trim() || undefined,
+          }),
+        }
+      );
 
-      if (res.ok) {
-        const data = await res.json();
+      if (res.ok && res.data) {
+        const data = res.data;
         setActionSuccessMessage(
           `Decision confirmed: ${data.final_decision} (Audit ID: ${data.audit_event_id}). Persisted in SQLite audit trail.`
         );
         handleScoreCase();
       } else {
-        const err = await res.json();
-        setActionErrorMessage(err.detail || "Officer decision submission failed.");
+        const errObj = res.error || {
+          kind: "server_error" as const,
+          status: res.status,
+          endpoint: `/api/cases/${selectedCaseId}/decision`,
+          message: "Officer decision submission failed.",
+          isOfficerSafe: true,
+          officerMessage: getOfficerErrorMessage("server_error"),
+        };
+        setActionErrorObj(errObj);
+        setActionErrorMessage(getOfficerErrorMessage(errObj.kind));
       }
     } catch (e: any) {
-      setActionErrorMessage(`Failed to record decision: ${e.message}`);
+      const errObj: ApiError = {
+        kind: "network",
+        status: 0,
+        endpoint: `/api/cases/${selectedCaseId}/decision`,
+        message: "Network error",
+        details: e.message || String(e),
+        isOfficerSafe: true,
+        officerMessage: getOfficerErrorMessage("network"),
+      };
+      setActionErrorObj(errObj);
+      setActionErrorMessage(getOfficerErrorMessage("network"));
     } finally {
       setActionSubmitting(false);
     }
@@ -764,13 +929,14 @@ export default function FedCreditXDashboard() {
     setActionSubmitting(true);
     setActionSuccessMessage(null);
     setActionErrorMessage(null);
+    setActionErrorObj(null);
 
     const currentOfficer = currentUser?.displayName
       ? `${currentUser.displayName} (${currentUser.role === "bank_officer" ? "Bank Officer" : "Auditor"})`
       : (currentUser?.email || "officer@fedcreditx.com");
 
     try {
-      const res = await fetch(`${API_BASE}/api/approvals`, {
+      const res = await apiFetch(`/api/approvals`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -785,18 +951,36 @@ export default function FedCreditXDashboard() {
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      if (res.ok && res.data) {
+        const data = res.data;
         setActionSuccessMessage(
           `Application escalated to Senior Officers for review (Tracking ID: ${data.tracking_id}). Check Approval Tracking menu.`
         );
         handleScoreCase();
       } else {
-        const err = await res.json();
-        setActionErrorMessage(err.detail || "Failed to submit for senior review.");
+        const errObj = res.error || {
+          kind: "server_error" as const,
+          status: res.status,
+          endpoint: `/api/approvals`,
+          message: "Failed to submit for senior review.",
+          isOfficerSafe: true,
+          officerMessage: getOfficerErrorMessage("server_error"),
+        };
+        setActionErrorObj(errObj);
+        setActionErrorMessage(getOfficerErrorMessage(errObj.kind));
       }
     } catch (e: any) {
-      setActionErrorMessage(`Submission error: ${e.message}`);
+      const errObj: ApiError = {
+        kind: "network",
+        status: 0,
+        endpoint: `/api/approvals`,
+        message: "Network error",
+        details: e.message || String(e),
+        isOfficerSafe: true,
+        officerMessage: getOfficerErrorMessage("network"),
+      };
+      setActionErrorObj(errObj);
+      setActionErrorMessage(getOfficerErrorMessage("network"));
     } finally {
       setActionSubmitting(false);
     }
@@ -811,7 +995,7 @@ export default function FedCreditXDashboard() {
     const comments = seniorDecisionComments[trackingId] || "";
 
     try {
-      const res = await fetch(`${API_BASE}/api/approvals/${trackingId}/decision`, {
+      const res = await apiFetch(`/api/approvals/${trackingId}/decision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -824,11 +1008,11 @@ export default function FedCreditXDashboard() {
       if (res.ok) {
         fetchApprovals();
       } else {
-        const err = await res.json();
-        alert(err.detail || "Failed to record senior decision.");
+        const msg = res.error?.officerMessage || "The server is waking up. Retry in a few seconds.";
+        alert(msg);
       }
-    } catch (e: any) {
-      alert(`Decision error: ${e.message}`);
+    } catch {
+      alert("The server is waking up. Retry in a few seconds.");
     } finally {
       setSubmittingSeniorAction(null);
     }
@@ -923,23 +1107,20 @@ export default function FedCreditXDashboard() {
     setCsvParseError(null);
 
     try {
-      const authHeaders = getAuthHeaders();
-      const res = await fetch(`${API_BASE}/api/fl/sample-partner`, {
-        headers: authHeaders,
-        credentials: "include",
+      const res = await apiFetch<string>("/api/fl/sample-partner", {
+        headers: { Accept: "text/csv" },
       });
 
-      if (!res.ok) {
-        const errDetail = await res.text().catch(() => "");
+      if (!res.ok || !res.data) {
         throw {
           step: "sample-data",
           status: res.status,
           userMessage: "Unable to retrieve sample lender data from coordinator.",
-          technical: errDetail || `HTTP ${res.status}`,
+          technical: res.error?.details || `HTTP ${res.status}`,
         };
       }
 
-      const csvText = await res.text();
+      const csvText = typeof res.data === "string" ? res.data : String(res.data);
       const success = parseAndSetCsvText(csvText);
       if (success) {
         setOfficerCsvFile(new File([csvText], "lender_a_train.csv", { type: "text/csv" }));
@@ -966,22 +1147,12 @@ export default function FedCreditXDashboard() {
     setOfficerTrainingMessage("Step 1/5: Verifying coordinator service health...");
 
     // 1. Step: health
-    let healthRes;
-    try {
-      healthRes = await fetch(`${API_BASE}/api/health`, { credentials: "include" });
-    } catch (e: any) {
-      setOfficerFailedStep("health");
-      setOfficerHttpStatus(null);
-      setOfficerTrainingError("The credit risk coordination service is unreachable. Please verify your connection.");
-      setOfficerTechnicalDetails(e.message || "Network error");
-      setIsOfficerTraining(false);
-      return;
-    }
+    const healthRes = await apiFetch("/api/health");
     if (!healthRes.ok) {
       setOfficerFailedStep("health");
-      setOfficerHttpStatus(healthRes.status);
+      setOfficerHttpStatus(healthRes.status || null);
       setOfficerTrainingError("The coordination service is currently unavailable.");
-      setOfficerTechnicalDetails(`HTTP ${healthRes.status}`);
+      setOfficerTechnicalDetails(healthRes.error?.details || `HTTP ${healthRes.status}`);
       setIsOfficerTraining(false);
       return;
     }
@@ -989,30 +1160,16 @@ export default function FedCreditXDashboard() {
     // 2. Step: config
     setOfficerTrainingProgress(20);
     setOfficerTrainingMessage("Step 2/5: Fetching collaborative round parameters...");
-    let configRes, configData;
-    try {
-      configRes = await fetch(`${API_BASE}/api/fl/config`, {
-        headers: getAuthHeaders(),
-        credentials: "include",
-      });
-    } catch (e: any) {
+    const configRes = await apiFetch("/api/fl/config");
+    if (!configRes.ok || !configRes.data) {
       setOfficerFailedStep("config");
-      setOfficerHttpStatus(null);
-      setOfficerTrainingError("Unable to retrieve round configuration from coordinator.");
-      setOfficerTechnicalDetails(e.message || "Network error");
-      setIsOfficerTraining(false);
-      return;
-    }
-    if (!configRes.ok) {
-      const errJson = await configRes.json().catch(() => ({}));
-      setOfficerFailedStep("config");
-      setOfficerHttpStatus(configRes.status);
+      setOfficerHttpStatus(configRes.status || null);
       setOfficerTrainingError("Failed to fetch collaborative round settings.");
-      setOfficerTechnicalDetails(errJson.detail || `HTTP ${configRes.status}`);
+      setOfficerTechnicalDetails(configRes.error?.details || `HTTP ${configRes.status}`);
       setIsOfficerTraining(false);
       return;
     }
-    configData = await configRes.json();
+    const configData = configRes.data;
 
     // 3. Step: sample-data
     setOfficerTrainingProgress(35);
@@ -1029,30 +1186,16 @@ export default function FedCreditXDashboard() {
     // 4. Step: global-model
     setOfficerTrainingProgress(50);
     setOfficerTrainingMessage("Step 4/5: Loading active collaborative global model...");
-    let modelRes, globalModelData;
-    try {
-      modelRes = await fetch(`${API_BASE}/api/fl/global-model`, {
-        headers: getAuthHeaders(),
-        credentials: "include",
-      });
-    } catch (e: any) {
+    const modelRes = await apiFetch("/api/fl/global-model");
+    if (!modelRes.ok || !modelRes.data) {
       setOfficerFailedStep("global-model");
-      setOfficerHttpStatus(null);
-      setOfficerTrainingError("Could not retrieve global model weights from coordinator.");
-      setOfficerTechnicalDetails(e.message || "Network error");
-      setIsOfficerTraining(false);
-      return;
-    }
-    if (!modelRes.ok) {
-      const errJson = await modelRes.json().catch(() => ({}));
-      setOfficerFailedStep("global-model");
-      setOfficerHttpStatus(modelRes.status);
+      setOfficerHttpStatus(modelRes.status || null);
       setOfficerTrainingError("Unable to download the baseline global model.");
-      setOfficerTechnicalDetails(errJson.detail || `HTTP ${modelRes.status}`);
+      setOfficerTechnicalDetails(modelRes.error?.details || `HTTP ${modelRes.status}`);
       setIsOfficerTraining(false);
       return;
     }
-    globalModelData = await modelRes.json();
+    const globalModelData = modelRes.data;
 
     // 5. Preprocess and train in JS via flTrainer
     setOfficerTrainingProgress(65);
@@ -1084,44 +1227,31 @@ export default function FedCreditXDashboard() {
     setOfficerTrainingProgress(92);
     setOfficerTrainingMessage("Submitting locally trained model update...");
 
-    let updateRes;
-    try {
-      updateRes = await fetch(`${API_BASE}/api/fl/update`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...getAuthHeaders(),
-        },
-        credentials: "include",
-        body: JSON.stringify({
-          round_id: configData.round_id,
-          lender_id: selectedLender || "lender_a",
-          weights: trainResult.weights,
-          bias: trainResult.bias,
-          num_samples: trainResult.num_samples,
-          steps: trainResult.steps,
-        }),
-      });
-    } catch (e: any) {
-      setOfficerFailedStep("update");
-      setOfficerHttpStatus(null);
-      setOfficerTrainingError("Coordinator did not receive the model update. Please check connection.");
-      setOfficerTechnicalDetails(e.message || "Network error");
-      setIsOfficerTraining(false);
-      return;
-    }
+    const updateRes = await apiFetch("/api/fl/update", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        round_id: configData.round_id,
+        lender_id: selectedLender || "lender_a",
+        weights: trainResult.weights,
+        bias: trainResult.bias,
+        num_samples: trainResult.num_samples,
+        steps: trainResult.steps,
+      }),
+    });
 
     if (!updateRes.ok) {
-      const errJson = await updateRes.json().catch(() => ({}));
       if (updateRes.status === 409) {
         setOfficerTrainingProgress(100);
         setOfficerTrainingMessage(`Officer update already submitted for round ${configData.round_id} (HTTP 409).`);
         setInAppNotice(`Round ${configData.round_id}: You have already submitted updates for this round.`);
       } else {
         setOfficerFailedStep("update");
-        setOfficerHttpStatus(updateRes.status);
+        setOfficerHttpStatus(updateRes.status || null);
         setOfficerTrainingError("The coordinator rejected the model update submission.");
-        setOfficerTechnicalDetails(errJson.detail || `HTTP ${updateRes.status}`);
+        setOfficerTechnicalDetails(updateRes.error?.details || `HTTP ${updateRes.status}`);
       }
       setIsOfficerTraining(false);
       return;
@@ -1139,12 +1269,10 @@ export default function FedCreditXDashboard() {
     setSimulationResult(null);
     setShowSimulationDetails(false);
     try {
-      const authHeaders = getAuthHeaders();
-      const res = await fetch(`${API_BASE}/api/runs?rounds=3&epochs=1&privacy_mode=dp`, {
+      const res = await apiFetch("/api/runs?rounds=3&epochs=1&privacy_mode=dp", {
         method: "POST",
-        headers: authHeaders,
       });
-      const d = await res.json().catch(() => ({}));
+      const d = res.data || {};
       setSimulationResult(d);
       if (res.ok && d.status === "completed") {
         setTrainingRunStatus(`Simulation completed! Run ID: ${d.run_id} | AUROC: ${d.metrics?.roc_auc || "0.884"}`);
@@ -1153,7 +1281,7 @@ export default function FedCreditXDashboard() {
         setTrainingRunStatus(`Simulation run failed at step: [${failedStep}].`);
       }
     } catch (e: any) {
-      setTrainingRunStatus(`Network error: ${e.message}`);
+      setTrainingRunStatus(`The server is waking up. Retry in a few seconds.`);
     } finally {
       setIsTraining(false);
     }
@@ -1593,6 +1721,17 @@ export default function FedCreditXDashboard() {
 
           {/* Main Content Body */}
           <main className="flex-1 p-5 sm:p-7 lg:p-8 space-y-6 overflow-y-auto">
+            {isServerWakingUp && (
+              <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl flex items-center justify-between text-xs font-semibold shadow-xs animate-pulse">
+                <div className="flex items-center gap-2.5">
+                  <IconRefresh className="w-4 h-4 animate-spin text-amber-600 shrink-0" />
+                  <span>The server is waking up (attempt {wakeUpAttempt} of {wakeUpTotal}). Initializing connection...</span>
+                </div>
+                <span className="text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full uppercase tracking-wider font-bold">
+                  Cold Start
+                </span>
+              </div>
+            )}
             
             {/* ========================================================= */}
             {/* SCREEN A: APPLICANT DECISION (Underwriting Officer View)   */}
@@ -1828,10 +1967,12 @@ export default function FedCreditXDashboard() {
                         )}
                       </div>
 
-                      {casesError && (
-                        <div className="p-3 bg-[#FEF2F2] border border-[#FCA5A5] text-[#CF5555] rounded-xl text-xs font-semibold">
-                          {casesError}
-                        </div>
+                      {(casesErrorObj || casesError) && (
+                        <ErrorBanner
+                          error={casesErrorObj || casesError}
+                          userRole={currentUser?.role}
+                          onRetry={() => loadCases(selectedLender)}
+                        />
                       )}
 
                       {/* 8 Feature Metric Tiles */}
@@ -1905,10 +2046,12 @@ export default function FedCreditXDashboard() {
                         )}
                       </button>
 
-                      {scoreError && (
-                        <div className="p-3 bg-[#FEF2F2] border border-[#FCA5A5] text-[#CF5555] rounded-xl text-xs font-medium">
-                          {scoreError}
-                        </div>
+                      {(scoreErrorObj || scoreError) && (
+                        <ErrorBanner
+                          error={scoreErrorObj || scoreError}
+                          userRole={currentUser?.role}
+                          onRetry={handleScoreCase}
+                        />
                       )}
                     </div>
 
@@ -2123,10 +2266,11 @@ export default function FedCreditXDashboard() {
                           {actionSuccessMessage}
                         </div>
                       )}
-                      {actionErrorMessage && (
-                        <div className="p-3 bg-[#FEF2F2] border border-[#FCA5A5] text-[#CF5555] rounded-xl text-xs font-semibold">
-                          {actionErrorMessage}
-                        </div>
+                      {(actionErrorObj || actionErrorMessage) && (
+                        <ErrorBanner
+                          error={actionErrorObj || actionErrorMessage}
+                          userRole={currentUser?.role}
+                        />
                       )}
                     </div>
                   </div>
