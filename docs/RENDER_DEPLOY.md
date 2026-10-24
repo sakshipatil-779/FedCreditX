@@ -9,10 +9,11 @@ FedCreditX is deployed on Render as two connected services defined in `render.ya
 > [!NOTE]
 > **Next.js Node Service Architecture vs Static Export:**
 > The frontend is **NOT a static export**. It runs as a dynamic Node.js service using `next start`.
-> Same-origin API routing is achieved via Next.js `rewrites()` in `frontend/next.config.ts`:
-> ```typescript
+> Same-origin API routing is achieved via Next.js `rewrites()` in `frontend/next.config.js`:
+> ```javascript
 > async rewrites() {
->   const backendUrl = process.env.BACKEND_URL || "https://fedcreditx-api.onrender.com";
+>   const isProd = process.env.NODE_ENV === "production";
+>   const backendUrl = process.env.BACKEND_URL || (isProd ? "" : "http://127.0.0.1:8000");
 >   return [
 >     {
 >       source: "/api/:path*",
@@ -21,8 +22,16 @@ FedCreditX is deployed on Render as two connected services defined in `render.ya
 >   ];
 > }
 > ```
-> This proxies all browser requests sent to `https://fedcreditx.onrender.com/api/*` to the FastAPI backend at `https://fedcreditx-api.onrender.com/api/*`.
-> As a result, the `session_token` cookie is treated as a **first-party cookie** on `fedcreditx.onrender.com`, completely bypassing third-party cookie blocking in modern browsers (Safari, Chrome, Firefox).
+> In production, `frontend/next.config.js` validates that `BACKEND_URL` is set; if missing, the build fails immediately with an actionable error directing the developer to configure `BACKEND_URL` in the Render dashboard.
+> 
+> **Alternative Static Site Rewrite Rule (if ever deployed as static export):**
+> If the frontend were ever switched from dynamic Next.js Node to a Render Static Site:
+> - **Source**: `/api/*`
+> - **Destination**: `https://fedcreditx-api.onrender.com/api/*`
+> - **Action**: `Rewrite` (NOT `Redirect`)
+>
+> **Cookie and Header Forwarding:**
+> Because all browser requests target relative same-origin paths (`/api/*`), Next.js rewrites forward incoming `Cookie` headers to the FastAPI backend and pass `Set-Cookie` headers back to the browser. Furthermore, `frontend/src/lib/api.ts` attaches `credentials: 'same-origin'` and forwards local session tokens in `Authorization: Bearer <token>` and `X-Session-Token` headers. This guarantees robust authentication even in cross-subdomain or proxied environments.
 
 ---
 
