@@ -35,6 +35,46 @@ FedCreditX is deployed on Render as two connected services defined in `render.ya
 
 ---
 
+## Frontend proxy
+
+To route browser requests seamlessly to the FastAPI backend while preserving cookie credentials, Next.js implements same-origin rewrites mapping `/api/:path*` to `${BACKEND_URL}/api/:path*`.
+
+### 1. Setting BACKEND_URL on the Frontend Service
+1. Open the [Render Dashboard](https://dashboard.render.com).
+2. Navigate to your frontend Web Service: **`fedcreditx`** (or `fedcreditx-ui`).
+3. Click **Environment** in the left sidebar.
+4. Add or update the environment variable:
+   - **Key**: `BACKEND_URL`
+   - **Value**: `https://fedcreditx-api.onrender.com` (Ensure no trailing slash).
+5. Click **Save Changes**.
+
+### 2. Trigger Clear Build Cache & Deploy
+Because Next.js rewrites are configured at build time, changing `BACKEND_URL` requires a rebuild:
+1. In the top-right corner of the `fedcreditx` service page, click **Manual Deploy**.
+2. Select **Clear build cache & deploy**.
+3. Monitor the build logs. During the build, verify the logged proxy line:
+   ```
+   Proxying /api to https://fedcreditx-api.onrender.com
+   ```
+4. Confirm that the service status transitions to **"Live"**.
+
+### 3. Verify with curl
+Once deployed, verify that the same-origin proxy is active and operating properly:
+
+1. **Verify Health Endpoint (Public):**
+   ```bash
+   curl.exe -i https://fedcreditx.onrender.com/api/health
+   ```
+   *Expected result*: HTTP `200 OK` with JSON response containing `"status":"healthy"`, `"ok":true`, and the backend metadata.
+
+2. **Verify Protected Cases Endpoint (Unauthenticated):**
+   ```bash
+   curl.exe -i https://fedcreditx.onrender.com/api/cases?lender_id=lender_a
+   ```
+   *Expected result*: HTTP `401 Unauthorized` with JSON response `{"detail":"Authentication required. Please sign in."}` (strictly JSON 401, not 502 Bad Gateway and not HTML).
+
+---
+
 ## Deploy Traceability & Commit Verification
 
 Every deployment can be verified through the public health endpoint:
